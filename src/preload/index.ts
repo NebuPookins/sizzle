@@ -1,13 +1,25 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+export interface ProjectTag {
+  name: string
+  score: number
+}
+
 export interface ScannedProject {
   name: string
   path: string
   readmeFiles: string[]
+  detectedTags: ProjectTag[]
+}
+
+export interface ProjectTagOverride {
+  tags: ProjectTag[]
+  primaryTag: string | null
 }
 
 export interface ProjectMeta {
   lastLaunched: number | null
+  tagOverride: ProjectTagOverride | null
 }
 
 export interface ScanSettings {
@@ -72,6 +84,9 @@ const api = {
 
   setLastLaunched: (projectPath: string): Promise<void> =>
     ipcRenderer.invoke('metadata:setLastLaunched', projectPath),
+
+  setTagOverride: (projectPath: string, override: ProjectTagOverride | null): Promise<ProjectMeta> =>
+    ipcRenderer.invoke('metadata:setTagOverride', projectPath, override),
 
   // PTY
   ptyCreate: (id: string, cwd: string, command: string, args: string[]): Promise<void> =>

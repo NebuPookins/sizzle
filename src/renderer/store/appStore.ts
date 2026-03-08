@@ -1,10 +1,15 @@
 import { create } from 'zustand'
+import type { ProjectTag, ProjectTagOverride } from '../../preload'
 
 export interface Project {
   name: string
   path: string
   readmeFiles: string[]
   lastLaunched: number | null
+  detectedTags: ProjectTag[]
+  tags: ProjectTag[]
+  primaryTag: string | null
+  tagOverride: ProjectTagOverride | null
 }
 
 export type LaunchTarget = 'claude' | 'codex'
@@ -21,6 +26,7 @@ interface AppState {
   selectProject(project: Project): void
   launchProject(project: Project, target: LaunchTarget): void
   setClaudeStatus(projectPath: string, status: ClaudeStatus): void
+  setProjectTagOverride(projectPath: string, override: ProjectTagOverride | null): void
   sortedProjects(): Project[]
 }
 
@@ -63,6 +69,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       claudeStatus: { ...state.claudeStatus, [projectPath]: status },
     }))
+  },
+
+  setProjectTagOverride(projectPath, override) {
+    set((state) => {
+      const projects = state.projects.map((project) => {
+        if (project.path !== projectPath) return project
+        const tags = (override?.tags ?? project.detectedTags).slice().sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+        const primaryTag = override?.primaryTag
+          ?? tags[0]?.name
+          ?? null
+        return {
+          ...project,
+          tagOverride: override,
+          tags,
+          primaryTag,
+        }
+      })
+
+      const selectedProject = state.selectedProject?.path === projectPath
+        ? projects.find((project) => project.path === projectPath) ?? null
+        : state.selectedProject
+
+      return { projects, selectedProject }
+    })
   },
 
   sortedProjects() {

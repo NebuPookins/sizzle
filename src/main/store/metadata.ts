@@ -8,6 +8,17 @@ const TMP_PATH = path.join(CONFIG_DIR, 'db.json.tmp')
 
 interface ProjectMeta {
   lastLaunched: number | null
+  tagOverride: ProjectTagOverride | null
+}
+
+export interface ProjectTag {
+  name: string
+  score: number
+}
+
+export interface ProjectTagOverride {
+  tags: ProjectTag[]
+  primaryTag: string | null
 }
 
 export interface ScanSettings {
@@ -78,20 +89,72 @@ function writeDB(db: DB): void {
 
 export function getMetadata(projectPath: string): ProjectMeta {
   const db = readDB()
-  return db.projects[projectPath] ?? { lastLaunched: null }
+  return db.projects[projectPath] ?? { lastLaunched: null, tagOverride: null }
 }
 
 export function setLastLaunched(projectPath: string): void {
   const db = readDB()
   if (!db.projects[projectPath]) {
-    db.projects[projectPath] = { lastLaunched: null }
+    db.projects[projectPath] = { lastLaunched: null, tagOverride: null }
   }
   db.projects[projectPath].lastLaunched = Date.now()
   writeDB(db)
 }
 
 export function getAllMetadata(): Record<string, ProjectMeta> {
-  return readDB().projects
+  const db = readDB()
+  for (const projectPath of Object.keys(db.projects)) {
+    if (!db.projects[projectPath].tagOverride) {
+      db.projects[projectPath].tagOverride = null
+    }
+  }
+  return db.projects
+}
+
+function sanitizeTagName(value: string): string {
+  return value.trim().replace(/\s+/g, ' ')
+}
+
+function normalizeTagOverride(value: ProjectTagOverride): ProjectTagOverride {
+  const tagMap = new Map<string, number>()
+  for (const tag of value.tags) {
+    if (!tag || typeof tag.name !== 'string') continue
+    const name = sanitizeTagName(tag.name)
+    if (!name) continue
+    const score = Number.isFinite(tag.score) && tag.score > 0 ? tag.score : 0
+    tagMap.set(name, Math.max(tagMap.get(name) ?? 0, score))
+  }
+
+  const tags = Array.from(tagMap.entries())
+    .map(([name, score]) => ({ name, score }))
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+
+  const totalScore = tags.reduce((sum, tag) => sum + tag.score, 0)
+  const normalizedTags = totalScore > 0
+    ? tags.map((tag) => ({ ...tag, score: tag.score / totalScore }))
+    : tags.map((tag) => ({ ...tag, score: 1 / Math.max(tags.length, 1) }))
+
+  const primaryTag = typeof value.primaryTag === 'string' && value.primaryTag.trim()
+    ? sanitizeTagName(value.primaryTag)
+    : null
+  const resolvedPrimary = primaryTag && normalizedTags.some((tag) => tag.name === primaryTag)
+    ? primaryTag
+    : (normalizedTags[0]?.name ?? null)
+
+  return {
+    tags: normalizedTags,
+    primaryTag: resolvedPrimary,
+  }
+}
+
+export function setTagOverride(projectPath: string, override: ProjectTagOverride | null): ProjectMeta {
+  const db = readDB()
+  if (!db.projects[projectPath]) {
+    db.projects[projectPath] = { lastLaunched: null, tagOverride: null }
+  }
+  db.projects[projectPath].tagOverride = override ? normalizeTagOverride(override) : null
+  writeDB(db)
+  return db.projects[projectPath]
 }
 
 export function getScanSettings(): ScanSettings {

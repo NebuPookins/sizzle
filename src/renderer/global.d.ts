@@ -1,4 +1,11 @@
-import type { ScannedProject, ProjectMeta, FileSystemEntry, FilePreview, ScanSettings } from '../preload/index'
+import type {
+  ScannedProject,
+  ProjectMeta,
+  ProjectTagOverride,
+  FileSystemEntry,
+  FilePreview,
+  ScanSettings,
+} from '../preload/index'
 
 declare global {
   interface Window {
@@ -16,6 +23,7 @@ declare global {
       getMetadata(projectPath: string): Promise<ProjectMeta>
       getAllMetadata(): Promise<Record<string, ProjectMeta>>
       setLastLaunched(projectPath: string): Promise<void>
+      setTagOverride(projectPath: string, override: ProjectTagOverride | null): Promise<ProjectMeta>
       ptyCreate(id: string, cwd: string, command: string, args: string[]): Promise<void>
       ptyWrite(id: string, data: string): Promise<void>
       ptyResize(id: string, cols: number, rows: number): Promise<void>

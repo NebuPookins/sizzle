@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { LaunchTarget, Project, useAppStore } from '../../store/appStore'
 import FileExplorerPane from './FileExplorerPane'
+import type { ProjectTag, ProjectTagOverride } from '../../../preload'
 
 interface Props {
   project: Project
@@ -13,7 +14,10 @@ export default function MarkdownView({ project }: Props) {
   const [files, setFiles] = useState<string[]>([])
   const [activeFile, setActiveFile] = useState<'explorer' | string | null>(null)
   const [content, setContent] = useState<string | null>(null)
-  const { launchProject } = useAppStore()
+  const [isEditingTags, setIsEditingTags] = useState(false)
+  const [tagInput, setTagInput] = useState('')
+  const [primaryTagInput, setPrimaryTagInput] = useState('')
+  const { launchProject, setProjectTagOverride } = useAppStore()
 
   useEffect(() => {
     setFiles([])
@@ -35,12 +39,68 @@ export default function MarkdownView({ project }: Props) {
     })
   }, [activeFile])
 
+  useEffect(() => {
+    setIsEditingTags(false)
+    setTagInput(project.tags.map((tag) => tag.name).join(', '))
+    setPrimaryTagInput(project.primaryTag ?? '')
+  }, [project.path, project.tags, project.primaryTag])
+
   async function handleLaunch(target: LaunchTarget) {
     await window.sizzle.setLastLaunched(project.path)
     launchProject(project, target)
   }
 
   const tabName = (f: string) => f.split('/').pop() ?? f
+
+  function formatTagPercent(score: number): string {
+    return `${Math.round(score * 100)}%`
+  }
+
+  function parseTagList(input: string): string[] {
+    const unique = new Set<string>()
+    for (const part of input.split(',')) {
+      const tag = part.trim().replace(/\s+/g, ' ')
+      if (tag) unique.add(tag)
+    }
+    return Array.from(unique)
+  }
+
+  async function saveTagOverride() {
+    const tagNames = parseTagList(tagInput)
+    if (tagNames.length === 0) {
+      const updated = await window.sizzle.setTagOverride(project.path, null)
+      setProjectTagOverride(project.path, updated.tagOverride)
+      setIsEditingTags(false)
+      return
+    }
+
+    const scoreMap = new Map<string, number>()
+    for (const tag of project.tags) {
+      scoreMap.set(tag.name, tag.score)
+    }
+    const fallbackBase = tagNames.length + 1
+    const tags: ProjectTag[] = tagNames.map((name, index) => ({
+      name,
+      score: scoreMap.get(name) ?? 1 / (fallbackBase + index),
+    }))
+
+    const chosenPrimary = primaryTagInput.trim()
+    const override: ProjectTagOverride = {
+      tags,
+      primaryTag: tagNames.includes(chosenPrimary) ? chosenPrimary : (tagNames[0] ?? null),
+    }
+    const updated = await window.sizzle.setTagOverride(project.path, override)
+    setProjectTagOverride(project.path, updated.tagOverride)
+    setIsEditingTags(false)
+  }
+
+  async function clearTagOverride() {
+    const updated = await window.sizzle.setTagOverride(project.path, null)
+    setProjectTagOverride(project.path, updated.tagOverride)
+    setTagInput(project.detectedTags.map((tag) => tag.name).join(', '))
+    setPrimaryTagInput(project.detectedTags[0]?.name ?? '')
+    setIsEditingTags(false)
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -91,6 +151,148 @@ export default function MarkdownView({ project }: Props) {
         >
           Launch Codex
         </button>
+      </div>
+
+      <div style={{
+        padding: '10px 16px 12px',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)' }}>Overview</div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+            {!isEditingTags && (
+              <button
+                onClick={() => setIsEditingTags(true)}
+                style={{
+                  background: 'var(--bg-hover)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 4,
+                  padding: '4px 8px',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                }}
+              >
+                Edit tags
+              </button>
+            )}
+            {project.tagOverride && !isEditingTags && (
+              <button
+                onClick={clearTagOverride}
+                style={{
+                  background: 'transparent',
+                  color: 'var(--text-muted)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 4,
+                  padding: '4px 8px',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                }}
+              >
+                Reset auto
+              </button>
+            )}
+          </div>
+        </div>
+
+        {!isEditingTags && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {project.tags.length === 0 && (
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>No tags detected.</span>
+            )}
+            {project.tags.map((tag) => {
+              const isPrimary = project.primaryTag === tag.name
+              return (
+                <div
+                  key={tag.name}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '4px 8px',
+                    borderRadius: 999,
+                    border: `1px solid ${isPrimary ? 'var(--accent)' : 'var(--border)'}`,
+                    background: isPrimary ? 'var(--bg-selected)' : 'var(--bg-hover)',
+                    fontSize: 11,
+                    color: isPrimary ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  }}
+                >
+                  <span>{tag.name}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{formatTagPercent(tag.score)}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {isEditingTags && (
+          <div style={{ display: 'grid', gap: 6, gridTemplateColumns: '1fr auto auto' }}>
+            <input
+              type="text"
+              value={tagInput}
+              onChange={(event) => setTagInput(event.target.value)}
+              placeholder="Tags (comma-separated)"
+              style={{
+                background: 'var(--bg-input, var(--bg-main))',
+                border: '1px solid var(--border)',
+                borderRadius: 4,
+                color: 'var(--text-main)',
+                fontSize: 12,
+                padding: '6px 8px',
+                outline: 'none',
+              }}
+            />
+            <input
+              type="text"
+              value={primaryTagInput}
+              onChange={(event) => setPrimaryTagInput(event.target.value)}
+              placeholder="Primary"
+              style={{
+                width: 140,
+                background: 'var(--bg-input, var(--bg-main))',
+                border: '1px solid var(--border)',
+                borderRadius: 4,
+                color: 'var(--text-main)',
+                fontSize: 12,
+                padding: '6px 8px',
+                outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                onClick={() => setIsEditingTags(false)}
+                style={{
+                  background: 'transparent',
+                  color: 'var(--text-muted)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 4,
+                  padding: '6px 10px',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveTagOverride}
+                style={{
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 4,
+                  padding: '6px 10px',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}

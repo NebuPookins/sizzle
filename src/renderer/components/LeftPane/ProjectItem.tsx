@@ -66,6 +66,19 @@ export default function ProjectItem({ project, isSelected, isLaunched, onContext
             {formatDate(project.lastLaunched)}
           </div>
         )}
+        {project.primaryTag && (
+          <div style={{
+            marginTop: 2,
+            fontSize: 10,
+            color: 'var(--accent)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+          >
+            {project.primaryTag}
+          </div>
+        )}
       </div>
     </div>
   )

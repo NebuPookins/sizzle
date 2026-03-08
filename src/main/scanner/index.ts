@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { isProjectRoot } from './heuristics'
+import { detectProjectTags, ProjectTag } from './tags'
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'target', 'dist', 'build', '__pycache__',
@@ -11,6 +12,7 @@ export interface ScannedProject {
   name: string
   path: string
   readmeFiles: string[]
+  detectedTags: ProjectTag[]
 }
 
 function isPathWithinRoot(rootPath: string, candidatePath: string): boolean {
@@ -68,6 +70,7 @@ async function scanDir(
       name: path.basename(dir),
       path: dir,
       readmeFiles,
+      detectedTags: detectProjectTags(dir),
     })
     return // Don't recurse into project roots
   }
@@ -98,6 +101,7 @@ export async function scanForProjects(
       name: path.basename(manualRoot),
       path: manualRoot,
       readmeFiles: collectReadmeFiles(manualRoot, entries),
+      detectedTags: detectProjectTags(manualRoot),
     })
   }
 
