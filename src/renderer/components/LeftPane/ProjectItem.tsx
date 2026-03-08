@@ -61,22 +61,32 @@ export default function ProjectItem({ project, isSelected, isLaunched, onContext
         }}>
           {project.name}
         </div>
-        {project.lastLaunched && (
-          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            {formatDate(project.lastLaunched)}
-          </div>
-        )}
-        {project.primaryTag && (
+        {(project.lastLaunched || project.primaryTag) && (
           <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 6,
             marginTop: 2,
-            fontSize: 10,
-            color: 'var(--accent)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-          >
-            {project.primaryTag}
+          }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>
+              {formatDate(project.lastLaunched)}
+            </div>
+            {project.primaryTag && (
+              <div style={{
+                fontSize: 10,
+                color: 'var(--accent)',
+                background: 'color-mix(in srgb, var(--accent) 14%, transparent)',
+                borderRadius: 3,
+                padding: '1px 5px',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                minWidth: 0,
+              }}>
+                {project.primaryTag}
+              </div>
+            )}
           </div>
         )}
       </div>
