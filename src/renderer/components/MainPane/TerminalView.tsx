@@ -15,6 +15,7 @@ interface Props {
 
 export default function TerminalView({ projectPath, launchTarget }: Props) {
   const { setClaudeStatus, unlaunchProject } = useAppStore()
+  const isShellOnly = launchTarget === 'shell'
   const [agentExited, setAgentExited] = useState(false)
   const [agentSession, setAgentSession] = useState(0)
   const [shellExited, setShellExited] = useState(false)
@@ -23,21 +24,22 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const [activeTopTab, setActiveTopTab] = useState<'terminal' | 'explorer' | string>('terminal')
   const [activeMarkdown, setActiveMarkdown] = useState<string | null>(null)
   const shell = window.sizzle.defaultShell || '/bin/bash'
-  const agent = getAgent(launchTarget)
+  const agent = isShellOnly ? null : getAgent(launchTarget)
   const [agentArgs, setAgentArgs] = useState<string[] | null>(null)
-  const shellQuote = (value: string) => {
-    if (/^[A-Za-z0-9_./-]+$/.test(value)) return value
-    return `'${value.replace(/'/g, `'\\''`)}'`
-  }
   const tabName = (filePath: string) => filePath.split('/').pop() ?? filePath
 
   useEffect(() => {
-    if (!agentExited || !shellExited) return
+    if (isShellOnly) {
+      if (!shellExited) return
+    } else {
+      if (!agentExited || !shellExited) return
+    }
     const timer = setTimeout(() => unlaunchProject(projectPath), 2000)
     return () => clearTimeout(timer)
-  }, [agentExited, shellExited])
+  }, [agentExited, shellExited, isShellOnly])
 
   useEffect(() => {
+    if (!agent) return
     let isMounted = true
     setAgentArgs(null)
     agent.getArgs(projectPath).then((args) => {
@@ -89,168 +91,174 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       background: 'var(--border)',
     }}>
       {/* Label bar */}
-      <div style={{
-        display: 'flex',
-        flexShrink: 0,
-        background: 'var(--bg-panel)',
-        alignItems: 'center',
-        gap: 8,
-      }}>
+      {!isShellOnly && (
         <div style={{
+          display: 'flex',
           flexShrink: 0,
-          padding: '5px 12px',
-          fontSize: 11,
-          color: 'var(--text-muted)',
-          fontWeight: 600,
-          letterSpacing: '0.06em',
-          textTransform: 'uppercase',
+          background: 'var(--bg-panel)',
+          alignItems: 'center',
+          gap: 8,
         }}>
-          {agent.label}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'stretch', minWidth: 0, overflowX: 'auto' }}>
-          <button
-            onClick={() => setActiveTopTab('terminal')}
-            style={{
-              border: 'none',
-              borderBottom: activeTopTab === 'terminal' ? '2px solid var(--accent)' : '2px solid transparent',
-              background: 'transparent',
-              color: activeTopTab === 'terminal' ? 'var(--text-primary)' : 'var(--text-secondary)',
-              fontSize: 11,
-              fontWeight: activeTopTab === 'terminal' ? 600 : 500,
-              padding: '6px 10px 4px',
-              cursor: 'pointer',
-              textTransform: 'uppercase',
-              letterSpacing: '0.03em',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            Terminal
-          </button>
-          {markdownFiles.map((file) => (
+          <div style={{
+            flexShrink: 0,
+            padding: '5px 12px',
+            fontSize: 11,
+            color: 'var(--text-muted)',
+            fontWeight: 600,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+          }}>
+            {agent!.label}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'stretch', minWidth: 0, overflowX: 'auto' }}>
             <button
-              key={file}
-              onClick={() => setActiveTopTab(file)}
+              onClick={() => setActiveTopTab('terminal')}
               style={{
                 border: 'none',
-                borderBottom: activeTopTab === file ? '2px solid var(--accent)' : '2px solid transparent',
+                borderBottom: activeTopTab === 'terminal' ? '2px solid var(--accent)' : '2px solid transparent',
                 background: 'transparent',
-                color: activeTopTab === file ? 'var(--text-primary)' : 'var(--text-secondary)',
+                color: activeTopTab === 'terminal' ? 'var(--text-primary)' : 'var(--text-secondary)',
                 fontSize: 11,
-                fontWeight: activeTopTab === file ? 600 : 500,
+                fontWeight: activeTopTab === 'terminal' ? 600 : 500,
+                padding: '6px 10px 4px',
+                cursor: 'pointer',
+                textTransform: 'uppercase',
+                letterSpacing: '0.03em',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Terminal
+            </button>
+            {markdownFiles.map((file) => (
+              <button
+                key={file}
+                onClick={() => setActiveTopTab(file)}
+                style={{
+                  border: 'none',
+                  borderBottom: activeTopTab === file ? '2px solid var(--accent)' : '2px solid transparent',
+                  background: 'transparent',
+                  color: activeTopTab === file ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  fontSize: 11,
+                  fontWeight: activeTopTab === file ? 600 : 500,
+                  padding: '6px 10px 4px',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {tabName(file)}
+              </button>
+            ))}
+            <button
+              onClick={() => setActiveTopTab('explorer')}
+              style={{
+                border: 'none',
+                borderBottom: activeTopTab === 'explorer' ? '2px solid var(--accent)' : '2px solid transparent',
+                background: 'transparent',
+                color: activeTopTab === 'explorer' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                fontSize: 11,
+                fontWeight: activeTopTab === 'explorer' ? 600 : 500,
                 padding: '6px 10px 4px',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
               }}
             >
-              {tabName(file)}
+              Explorer
             </button>
-          ))}
-          <button
-            onClick={() => setActiveTopTab('explorer')}
-            style={{
-              border: 'none',
-              borderBottom: activeTopTab === 'explorer' ? '2px solid var(--accent)' : '2px solid transparent',
-              background: 'transparent',
-              color: activeTopTab === 'explorer' ? 'var(--text-primary)' : 'var(--text-secondary)',
-              fontSize: 11,
-              fontWeight: activeTopTab === 'explorer' ? 600 : 500,
-              padding: '6px 10px 4px',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            Explorer
-          </button>
-        </div>
-        <div style={{ flex: 1 }} />
-        <button
-          onClick={() => {
-            window.sizzle.ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
-            window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
-            unlaunchProject(projectPath)
-          }}
-          style={{
-            marginRight: 8,
-            padding: '3px 9px',
-            fontSize: 11,
-            fontWeight: 600,
-            borderRadius: 4,
-            border: '1px solid #5a2020',
-            background: '#2a1010',
-            color: '#c07070',
-            cursor: 'pointer',
-            letterSpacing: '0.03em',
-          }}
-        >
-          ■ Stop
-        </button>
-        {agentExited && (
+          </div>
+          <div style={{ flex: 1 }} />
           <button
             onClick={() => {
-              setAgentExited(false)
-              setAgentSession((value) => value + 1)
+              window.sizzle.ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
+              window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+              unlaunchProject(projectPath)
             }}
             style={{
-              marginRight: 10,
-              padding: '4px 10px',
+              marginRight: 8,
+              padding: '3px 9px',
               fontSize: 11,
               fontWeight: 600,
-              borderRadius: 5,
-              border: '1px solid var(--border)',
-              background: 'var(--bg-hover)',
-              color: 'var(--text-primary)',
+              borderRadius: 4,
+              border: '1px solid #5a2020',
+              background: '#2a1010',
+              color: '#c07070',
               cursor: 'pointer',
+              letterSpacing: '0.03em',
             }}
           >
-            Relaunch
+            ■ Stop
           </button>
-        )}
-      </div>
+          {agentExited && (
+            <button
+              onClick={() => {
+                setAgentExited(false)
+                setAgentSession((value) => value + 1)
+              }}
+              style={{
+                marginRight: 10,
+                padding: '4px 10px',
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: 5,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-hover)',
+                color: 'var(--text-primary)',
+                cursor: 'pointer',
+              }}
+            >
+              Relaunch
+            </button>
+          )}
+        </div>
+      )}
 
-      {/* Agent terminal */}
-      <div style={{
-        flex: 1,
-        minHeight: 0,
-        display: activeTopTab === 'terminal' ? 'flex' : 'none',
-        flexDirection: 'column',
-      }}>
-        {agentArgs !== null && (
-          <XtermPane
-            key={`agent-${agentSession}`}
-            id={`${launchTarget}-${projectPath}-${agentSession}`}
-            cwd={projectPath}
-            command={agent.command}
-            args={agentArgs}
-            onStatusChange={(status) => setClaudeStatus(projectPath, status)}
-            onExit={() => setAgentExited(true)}
-          />
-        )}
-      </div>
-      <div style={{
-        flex: 1,
-        minHeight: 0,
-        display: activeTopTab === 'terminal' ? 'none' : 'flex',
-        flexDirection: 'column',
-        overflowY: activeTopTab === 'explorer' ? 'hidden' : 'auto',
-        padding: activeTopTab === 'explorer' ? 0 : '18px 20px',
-        background: '#0f0f1a',
-      }}>
-        {activeTopTab === 'explorer' && (
-          <FileExplorerPane projectPath={projectPath} />
-        )}
-        {activeTopTab !== 'explorer' && activeMarkdown === null && (
-          <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
-        )}
-        {activeTopTab !== 'explorer' && activeMarkdown !== null && (
-          <div className="markdown-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-              {activeMarkdown}
-            </ReactMarkdown>
+      {/* Agent terminal (hidden in shell-only mode) */}
+      {!isShellOnly && (
+        <>
+          <div style={{
+            flex: 1,
+            minHeight: 0,
+            display: activeTopTab === 'terminal' ? 'flex' : 'none',
+            flexDirection: 'column',
+          }}>
+            {agentArgs !== null && (
+              <XtermPane
+                key={`agent-${agentSession}`}
+                id={`${launchTarget}-${projectPath}-${agentSession}`}
+                cwd={projectPath}
+                command={agent!.command}
+                args={agentArgs}
+                onStatusChange={(status) => setClaudeStatus(projectPath, status)}
+                onExit={() => setAgentExited(true)}
+              />
+            )}
           </div>
-        )}
-      </div>
+          <div style={{
+            flex: 1,
+            minHeight: 0,
+            display: activeTopTab === 'terminal' ? 'none' : 'flex',
+            flexDirection: 'column',
+            overflowY: activeTopTab === 'explorer' ? 'hidden' : 'auto',
+            padding: activeTopTab === 'explorer' ? 0 : '18px 20px',
+            background: '#0f0f1a',
+          }}>
+            {activeTopTab === 'explorer' && (
+              <FileExplorerPane projectPath={projectPath} />
+            )}
+            {activeTopTab !== 'explorer' && activeMarkdown === null && (
+              <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
+            )}
+            {activeTopTab !== 'explorer' && activeMarkdown !== null && (
+              <div className="markdown-body">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                  {activeMarkdown}
+                </ReactMarkdown>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
-      {/* Divider label */}
+      {/* Divider label / shell header */}
       <div style={{
         display: 'flex',
         flexShrink: 0,
@@ -268,6 +276,28 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
         }}>
           Shell
         </div>
+        {isShellOnly && (
+          <button
+            onClick={() => {
+              window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+              unlaunchProject(projectPath)
+            }}
+            style={{
+              marginRight: 8,
+              padding: '3px 9px',
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 4,
+              border: '1px solid #5a2020',
+              background: '#2a1010',
+              color: '#c07070',
+              cursor: 'pointer',
+              letterSpacing: '0.03em',
+            }}
+          >
+            ■ Stop
+          </button>
+        )}
         {shellExited && (
           <button
             onClick={() => {

@@ -156,6 +156,24 @@ export default function MarkdownView({ project }: Props) {
         >
           Launch Codex
         </button>
+        <button
+          onClick={() => handleLaunch('shell')}
+          style={{
+            background: 'var(--bg-hover)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            padding: '7px 14px',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            flexShrink: 0,
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-selected)' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)' }}
+        >
+          Shell
+        </button>
       </div>
 
       <div style={{

@@ -12,7 +12,7 @@ export interface Project {
   tagOverride: ProjectTagOverride | null
 }
 
-export type LaunchTarget = 'claude' | 'codex'
+export type LaunchTarget = 'claude' | 'codex' | 'shell'
 type ClaudeStatus = 'working' | 'waiting'
 
 interface AppState {
