@@ -1,4 +1,4 @@
-import type { ScannedProject, ProjectMeta } from '../preload/index'
+import type { ScannedProject, ProjectMeta, FileSystemEntry, FilePreview } from '../preload/index'
 
 declare global {
   interface Window {
@@ -7,6 +7,8 @@ declare global {
       scanProjects(): Promise<ScannedProject[]>
       getMarkdownFiles(projectPath: string): Promise<string[]>
       readMarkdownFile(filePath: string): Promise<string | null>
+      listDirectory(projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]>
+      previewFile(projectPath: string, filePath: string): Promise<FilePreview>
       getMetadata(projectPath: string): Promise<ProjectMeta>
       getAllMetadata(): Promise<Record<string, ProjectMeta>>
       setLastLaunched(projectPath: string): Promise<void>

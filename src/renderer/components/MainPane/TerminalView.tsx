@@ -5,6 +5,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { useAppStore } from '../../store/appStore'
 import type { LaunchTarget } from '../../store/appStore'
 import XtermPane from './XtermPane'
+import FileExplorerPane from './FileExplorerPane'
 
 interface Props {
   projectPath: string
@@ -18,7 +19,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const [shellExited, setShellExited] = useState(false)
   const [shellSession, setShellSession] = useState(0)
   const [markdownFiles, setMarkdownFiles] = useState<string[]>([])
-  const [activeTopTab, setActiveTopTab] = useState<'terminal' | string>('terminal')
+  const [activeTopTab, setActiveTopTab] = useState<'terminal' | 'explorer' | string>('terminal')
   const [activeMarkdown, setActiveMarkdown] = useState<string | null>(null)
   const shell = window.sizzle.defaultShell || '/bin/bash'
   const agentLabel = launchTarget === 'codex' ? 'Codex' : 'Claude Code'
@@ -47,7 +48,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   }, [projectPath])
 
   useEffect(() => {
-    if (activeTopTab === 'terminal') return
+    if (activeTopTab === 'terminal' || activeTopTab === 'explorer') return
 
     let isMounted = true
     const selectedFile = activeTopTab
@@ -89,47 +90,61 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
         }}>
           {agentLabel}
         </div>
-        {markdownFiles.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'stretch', minWidth: 0, overflowX: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'stretch', minWidth: 0, overflowX: 'auto' }}>
+          <button
+            onClick={() => setActiveTopTab('terminal')}
+            style={{
+              border: 'none',
+              borderBottom: activeTopTab === 'terminal' ? '2px solid var(--accent)' : '2px solid transparent',
+              background: 'transparent',
+              color: activeTopTab === 'terminal' ? 'var(--text-primary)' : 'var(--text-secondary)',
+              fontSize: 11,
+              fontWeight: activeTopTab === 'terminal' ? 600 : 500,
+              padding: '6px 10px 4px',
+              cursor: 'pointer',
+              textTransform: 'uppercase',
+              letterSpacing: '0.03em',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Terminal
+          </button>
+          {markdownFiles.map((file) => (
             <button
-              onClick={() => setActiveTopTab('terminal')}
+              key={file}
+              onClick={() => setActiveTopTab(file)}
               style={{
                 border: 'none',
-                borderBottom: activeTopTab === 'terminal' ? '2px solid var(--accent)' : '2px solid transparent',
+                borderBottom: activeTopTab === file ? '2px solid var(--accent)' : '2px solid transparent',
                 background: 'transparent',
-                color: activeTopTab === 'terminal' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                color: activeTopTab === file ? 'var(--text-primary)' : 'var(--text-secondary)',
                 fontSize: 11,
-                fontWeight: activeTopTab === 'terminal' ? 600 : 500,
+                fontWeight: activeTopTab === file ? 600 : 500,
                 padding: '6px 10px 4px',
                 cursor: 'pointer',
-                textTransform: 'uppercase',
-                letterSpacing: '0.03em',
                 whiteSpace: 'nowrap',
               }}
             >
-              Terminal
+              {tabName(file)}
             </button>
-            {markdownFiles.map((file) => (
-              <button
-                key={file}
-                onClick={() => setActiveTopTab(file)}
-                style={{
-                  border: 'none',
-                  borderBottom: activeTopTab === file ? '2px solid var(--accent)' : '2px solid transparent',
-                  background: 'transparent',
-                  color: activeTopTab === file ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  fontSize: 11,
-                  fontWeight: activeTopTab === file ? 600 : 500,
-                  padding: '6px 10px 4px',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {tabName(file)}
-              </button>
-            ))}
-          </div>
-        )}
+          ))}
+          <button
+            onClick={() => setActiveTopTab('explorer')}
+            style={{
+              border: 'none',
+              borderBottom: activeTopTab === 'explorer' ? '2px solid var(--accent)' : '2px solid transparent',
+              background: 'transparent',
+              color: activeTopTab === 'explorer' ? 'var(--text-primary)' : 'var(--text-secondary)',
+              fontSize: 11,
+              fontWeight: activeTopTab === 'explorer' ? 600 : 500,
+              padding: '6px 10px 4px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Explorer
+          </button>
+        </div>
         <div style={{ flex: 1 }} />
         {agentExited && (
           <button
@@ -177,14 +192,17 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
         minHeight: 0,
         display: activeTopTab === 'terminal' ? 'none' : 'flex',
         flexDirection: 'column',
-        overflowY: 'auto',
-        padding: '18px 20px',
+        overflowY: activeTopTab === 'explorer' ? 'hidden' : 'auto',
+        padding: activeTopTab === 'explorer' ? 0 : '18px 20px',
         background: '#0f0f1a',
       }}>
-        {activeMarkdown === null && (
+        {activeTopTab === 'explorer' && (
+          <FileExplorerPane projectPath={projectPath} />
+        )}
+        {activeTopTab !== 'explorer' && activeMarkdown === null && (
           <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
         )}
-        {activeMarkdown !== null && (
+        {activeTopTab !== 'explorer' && activeMarkdown !== null && (
           <div className="markdown-body">
             <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
               {activeMarkdown}

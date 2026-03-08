@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { LaunchTarget, Project, useAppStore } from '../../store/appStore'
+import FileExplorerPane from './FileExplorerPane'
 
 interface Props {
   project: Project
@@ -10,7 +11,7 @@ interface Props {
 
 export default function MarkdownView({ project }: Props) {
   const [files, setFiles] = useState<string[]>([])
-  const [activeFile, setActiveFile] = useState<string | null>(null)
+  const [activeFile, setActiveFile] = useState<'explorer' | string | null>(null)
   const [content, setContent] = useState<string | null>(null)
   const { launchProject } = useAppStore()
 
@@ -22,11 +23,12 @@ export default function MarkdownView({ project }: Props) {
     window.sizzle.getMarkdownFiles(project.path).then((f) => {
       setFiles(f)
       if (f.length > 0) setActiveFile(f[0])
+      else setActiveFile('explorer')
     })
   }, [project.path])
 
   useEffect(() => {
-    if (!activeFile) return
+    if (!activeFile || activeFile === 'explorer') return
     setContent(null)
     window.sizzle.readMarkdownFile(activeFile).then((c) => {
       setContent(c ?? '*Could not read file.*')
@@ -92,50 +94,67 @@ export default function MarkdownView({ project }: Props) {
       </div>
 
       {/* Tabs */}
-      {files.length > 0 && (
-        <div style={{
-          display: 'flex',
-          gap: 0,
-          padding: '0 16px',
-          borderBottom: '1px solid var(--border)',
-          flexShrink: 0,
-          overflowX: 'auto',
-        }}>
-          {files.map((f) => (
-            <button
-              key={f}
-              onClick={() => setActiveFile(f)}
-              style={{
-                background: 'none',
-                border: 'none',
-                borderBottom: f === activeFile ? '2px solid var(--accent)' : '2px solid transparent',
-                color: f === activeFile ? 'var(--text-primary)' : 'var(--text-secondary)',
-                padding: '8px 14px',
-                fontSize: 12,
-                cursor: 'pointer',
-                fontWeight: f === activeFile ? 600 : 400,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {tabName(f)}
-            </button>
-          ))}
-        </div>
-      )}
+      <div style={{
+        display: 'flex',
+        gap: 0,
+        padding: '0 16px',
+        borderBottom: '1px solid var(--border)',
+        flexShrink: 0,
+        overflowX: 'auto',
+      }}>
+        {files.map((f) => (
+          <button
+            key={f}
+            onClick={() => setActiveFile(f)}
+            style={{
+              background: 'none',
+              border: 'none',
+              borderBottom: f === activeFile ? '2px solid var(--accent)' : '2px solid transparent',
+              color: f === activeFile ? 'var(--text-primary)' : 'var(--text-secondary)',
+              padding: '8px 14px',
+              fontSize: 12,
+              cursor: 'pointer',
+              fontWeight: f === activeFile ? 600 : 400,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {tabName(f)}
+          </button>
+        ))}
+        <button
+          onClick={() => setActiveFile('explorer')}
+          style={{
+            background: 'none',
+            border: 'none',
+            borderBottom: activeFile === 'explorer' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeFile === 'explorer' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '8px 14px',
+            fontSize: 12,
+            cursor: 'pointer',
+            fontWeight: activeFile === 'explorer' ? 600 : 400,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Explorer
+        </button>
+      </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
-        {content === null && activeFile && (
+      <div style={{ flex: 1, minHeight: 0, overflowY: activeFile === 'explorer' ? 'hidden' : 'auto', padding: activeFile === 'explorer' ? 0 : '20px 24px' }}>
+        {activeFile === 'explorer' && (
+          <FileExplorerPane projectPath={project.path} />
+        )}
+        {activeFile !== 'explorer' && content === null && activeFile && (
           <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
         )}
-        {content !== null && (
+        {activeFile !== 'explorer' && content !== null && (
           <div className="markdown-body">
             <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
               {content}
             </ReactMarkdown>
           </div>
         )}
-        {files.length === 0 && content === null && (
+        {files.length === 0 && content === null && activeFile !== 'explorer' && (
           <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
             No markdown files found in this project.
           </div>

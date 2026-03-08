@@ -10,6 +10,22 @@ export interface ProjectMeta {
   lastLaunched: number | null
 }
 
+export interface FileSystemEntry {
+  name: string
+  path: string
+  isDirectory: boolean
+}
+
+export type FilePreviewKind = 'text' | 'media' | 'unsupported' | 'tooLarge' | 'error'
+
+export interface FilePreview {
+  kind: FilePreviewKind
+  content?: string
+  mimeType?: string
+  size?: number
+  message?: string
+}
+
 const api = {
   defaultShell: process.env.SHELL || process.env.COMSPEC || '/bin/bash',
 
@@ -22,6 +38,12 @@ const api = {
 
   readMarkdownFile: (filePath: string): Promise<string | null> =>
     ipcRenderer.invoke('markdown:readFile', filePath),
+
+  listDirectory: (projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]> =>
+    ipcRenderer.invoke('files:listDirectory', projectPath, directoryPath),
+
+  previewFile: (projectPath: string, filePath: string): Promise<FilePreview> =>
+    ipcRenderer.invoke('files:preview', projectPath, filePath),
 
   // Metadata
   getMetadata: (projectPath: string): Promise<ProjectMeta> =>
