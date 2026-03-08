@@ -20,7 +20,10 @@ export default function LeftPane({ onRefreshProjects }: Props) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const allProjects = sortedProjects()
   const projects = search
-    ? allProjects.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
+    ? allProjects.filter(p => {
+        const q = search.toLowerCase()
+        return p.name.toLowerCase().includes(q) || p.tags.some(t => t.name.toLowerCase().includes(q))
+      })
     : allProjects
 
   useEffect(() => {
