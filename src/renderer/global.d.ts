@@ -1,10 +1,14 @@
-import type { ScannedProject, ProjectMeta, FileSystemEntry, FilePreview } from '../preload/index'
+import type { ScannedProject, ProjectMeta, FileSystemEntry, FilePreview, ScanSettings } from '../preload/index'
 
 declare global {
   interface Window {
     sizzle: {
       defaultShell: string
       scanProjects(): Promise<ScannedProject[]>
+      getScanSettings(): Promise<ScanSettings>
+      setScanSettings(settings: ScanSettings): Promise<ScanSettings>
+      addIgnoreRoot(rootPath: string): Promise<ScanSettings>
+      pickDirectory(): Promise<string | null>
       getMarkdownFiles(projectPath: string): Promise<string[]>
       readMarkdownFile(filePath: string): Promise<string | null>
       listDirectory(projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]>

@@ -10,6 +10,11 @@ export interface ProjectMeta {
   lastLaunched: number | null
 }
 
+export interface ScanSettings {
+  scanRoots: string[]
+  ignoreRoots: string[]
+}
+
 export interface FileSystemEntry {
   name: string
   path: string
@@ -32,6 +37,18 @@ const api = {
   // Scanner
   scanProjects: (): Promise<ScannedProject[]> =>
     ipcRenderer.invoke('scanner:scan'),
+
+  getScanSettings: (): Promise<ScanSettings> =>
+    ipcRenderer.invoke('scanner:getSettings'),
+
+  setScanSettings: (settings: ScanSettings): Promise<ScanSettings> =>
+    ipcRenderer.invoke('scanner:setSettings', settings),
+
+  addIgnoreRoot: (rootPath: string): Promise<ScanSettings> =>
+    ipcRenderer.invoke('scanner:addIgnoreRoot', rootPath),
+
+  pickDirectory: (): Promise<string | null> =>
+    ipcRenderer.invoke('scanner:pickDirectory'),
 
   getMarkdownFiles: (projectPath: string): Promise<string[]> =>
     ipcRenderer.invoke('markdown:getFiles', projectPath),

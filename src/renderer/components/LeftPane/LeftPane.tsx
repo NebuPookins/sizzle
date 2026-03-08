@@ -1,14 +1,48 @@
-import { useState } from 'react'
-import { useAppStore } from '../../store/appStore'
+import { useEffect, useState } from 'react'
+import { Project, useAppStore } from '../../store/appStore'
 import ProjectItem from './ProjectItem'
+import ScanSettingsDialog from './ScanSettingsDialog'
 
-export default function LeftPane() {
+interface Props {
+  onRefreshProjects(): Promise<void>
+}
+
+interface ContextMenuState {
+  project: Project
+  x: number
+  y: number
+}
+
+export default function LeftPane({ onRefreshProjects }: Props) {
   const { selectedProject, launchedProjects, sortedProjects } = useAppStore()
   const [search, setSearch] = useState('')
+  const [showSettings, setShowSettings] = useState(false)
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const allProjects = sortedProjects()
   const projects = search
     ? allProjects.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
     : allProjects
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const clear = () => setContextMenu(null)
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') clear()
+    }
+    window.addEventListener('click', clear)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('click', clear)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [contextMenu])
+
+  const addProjectToIgnoreRoots = async () => {
+    if (!contextMenu) return
+    await window.sizzle.addIgnoreRoot(contextMenu.project.path)
+    await onRefreshProjects()
+    setContextMenu(null)
+  }
 
   return (
     <div style={{
@@ -59,6 +93,7 @@ export default function LeftPane() {
             project={project}
             isSelected={selectedProject?.path === project.path}
             isLaunched={launchedProjects.has(project.path)}
+            onContextMenuRequest={(menuProject, x, y) => setContextMenu({ project: menuProject, x, y })}
           />
         ))}
         {projects.length === 0 && (
@@ -72,6 +107,63 @@ export default function LeftPane() {
           </div>
         )}
       </div>
+
+      <div style={{ padding: '8px', borderTop: '1px solid var(--border)' }}>
+        <button
+          onClick={() => setShowSettings(true)}
+          style={{
+            width: '100%',
+            background: 'var(--bg-selected)',
+            border: '1px solid var(--border)',
+            color: 'var(--text-primary)',
+            borderRadius: 6,
+            fontSize: 12,
+            padding: '7px 10px',
+            cursor: 'pointer',
+          }}
+        >
+          Scan settings
+        </button>
+      </div>
+
+      {contextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+            background: 'var(--bg-panel)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            minWidth: 190,
+            padding: 4,
+            zIndex: 2200,
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+          }}
+        >
+          <button
+            onClick={addProjectToIgnoreRoots}
+            style={{
+              width: '100%',
+              textAlign: 'left',
+              padding: '8px 10px',
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              borderRadius: 4,
+            }}
+          >
+            Add to roots to ignore
+          </button>
+        </div>
+      )}
+
+      <ScanSettingsDialog
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        onSaved={onRefreshProjects}
+      />
     </div>
   )
 }

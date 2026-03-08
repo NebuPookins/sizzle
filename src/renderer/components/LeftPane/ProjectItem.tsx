@@ -4,6 +4,7 @@ interface Props {
   project: Project
   isSelected: boolean
   isLaunched: boolean
+  onContextMenuRequest(project: Project, x: number, y: number): void
 }
 
 function formatDate(ts: number | null): string {
@@ -17,13 +18,17 @@ function formatDate(ts: number | null): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export default function ProjectItem({ project, isSelected, isLaunched }: Props) {
+export default function ProjectItem({ project, isSelected, isLaunched, onContextMenuRequest }: Props) {
   const { selectProject, claudeStatus } = useAppStore()
   const status = isLaunched ? (claudeStatus[project.path] ?? 'waiting') : null
 
   return (
     <div
       onClick={() => selectProject(project)}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        onContextMenuRequest(project, event.clientX, event.clientY)
+      }}
       style={{
         display: 'flex',
         alignItems: 'center',

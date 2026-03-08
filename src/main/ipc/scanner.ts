@@ -1,9 +1,8 @@
-import { ipcMain } from 'electron'
+import { dialog, ipcMain } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import { scanForProjects } from '../scanner'
-
-const ROOT_DIR = '/mnt/safe/home/nebu/myPrograms'
+import { getScanSettings, setScanSettings } from '../store/metadata'
 const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 const MAX_MEDIA_PREVIEW_BYTES = 30 * 1024 * 1024
 
@@ -75,7 +74,37 @@ function isLikelyTextBuffer(buffer: Buffer): boolean {
 
 export function registerScannerHandlers(): void {
   ipcMain.handle('scanner:scan', async () => {
-    return await scanForProjects(ROOT_DIR)
+    const settings = getScanSettings()
+    const scanned = await scanForProjects(settings.scanRoots, settings.ignoreRoots)
+    const deduped = new Map<string, (typeof scanned)[number]>()
+    for (const project of scanned) {
+      if (!deduped.has(project.path)) {
+        deduped.set(project.path, project)
+      }
+    }
+    return Array.from(deduped.values())
+  })
+
+  ipcMain.handle('scanner:getSettings', async () => {
+    return getScanSettings()
+  })
+
+  ipcMain.handle('scanner:setSettings', async (_event, settings: { scanRoots: string[]; ignoreRoots: string[] }) => {
+    return setScanSettings(settings)
+  })
+
+  ipcMain.handle('scanner:addIgnoreRoot', async (_event, rootPath: string) => {
+    const current = getScanSettings()
+    const nextIgnoreRoots = [...current.ignoreRoots, rootPath]
+    return setScanSettings({ scanRoots: current.scanRoots, ignoreRoots: nextIgnoreRoots })
+  })
+
+  ipcMain.handle('scanner:pickDirectory', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
   })
 
   ipcMain.handle('markdown:getFiles', async (_event, projectPath: string) => {

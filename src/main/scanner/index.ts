@@ -13,7 +13,19 @@ export interface ScannedProject {
   readmeFiles: string[]
 }
 
-async function scanDir(dir: string, results: ScannedProject[]): Promise<void> {
+function isPathWithinRoot(rootPath: string, candidatePath: string): boolean {
+  const normalizedRoot = path.resolve(rootPath)
+  const normalizedCandidate = path.resolve(candidatePath)
+  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}${path.sep}`)
+}
+
+function shouldSkipByIgnoreRoots(dir: string, ignoreRoots: string[]): boolean {
+  return ignoreRoots.some((ignoreRoot) => isPathWithinRoot(ignoreRoot, dir))
+}
+
+async function scanDir(dir: string, ignoreRoots: string[], results: ScannedProject[]): Promise<void> {
+  if (shouldSkipByIgnoreRoots(dir, ignoreRoots)) return
+
   let entries: fs.Dirent[]
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -39,12 +51,12 @@ async function scanDir(dir: string, results: ScannedProject[]): Promise<void> {
   )
 
   await Promise.all(
-    subdirs.map((e) => scanDir(path.join(dir, e.name), results))
+    subdirs.map((e) => scanDir(path.join(dir, e.name), ignoreRoots, results))
   )
 }
 
-export async function scanForProjects(rootDir: string): Promise<ScannedProject[]> {
+export async function scanForProjects(rootDirs: string[], ignoreRoots: string[]): Promise<ScannedProject[]> {
   const results: ScannedProject[] = []
-  await scanDir(rootDir, results)
+  await Promise.all(rootDirs.map((rootDir) => scanDir(rootDir, ignoreRoots, results)))
   return results
 }

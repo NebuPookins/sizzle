@@ -32,7 +32,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   claudeStatus: {},
 
   setProjects(projects) {
-    set({ projects })
+    const selectedPath = get().selectedProject?.path
+    const selectedProject = selectedPath
+      ? projects.find((project) => project.path === selectedPath) ?? null
+      : null
+    set({ projects, selectedProject })
   },
 
   selectProject(project) {
