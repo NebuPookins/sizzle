@@ -176,7 +176,7 @@ export default function FileExplorerPane({ projectPath }: Props) {
   }
 
   return (
-    <div style={{ display: 'flex', flex: 1, minHeight: 0, borderTop: '1px solid var(--border)' }}>
+    <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', borderTop: '1px solid var(--border)' }}>
       <div style={{
         width: 320,
         minWidth: 220,
@@ -203,7 +203,7 @@ export default function FileExplorerPane({ projectPath }: Props) {
         )}
       </div>
 
-      <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'auto', padding: '16px 18px' }}>
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '16px 18px' }}>
         {!selectedFile && (
           <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Select a file to preview.</div>
         )}
