@@ -88,6 +88,10 @@ const api = {
   setTagOverride: (projectPath: string, override: ProjectTagOverride | null): Promise<ProjectMeta> =>
     ipcRenderer.invoke('metadata:setTagOverride', projectPath, override),
 
+  // Claude
+  claudeHasSession: (projectPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('claude:hasSession', projectPath),
+
   // PTY
   ptyCreate: (id: string, cwd: string, command: string, args: string[]): Promise<void> =>
     ipcRenderer.invoke('pty:create', id, cwd, command, args),

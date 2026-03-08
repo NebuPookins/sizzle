@@ -4,6 +4,7 @@ import { killAll } from './pty/manager'
 import { registerScannerHandlers } from './ipc/scanner'
 import { registerPtyHandlers } from './ipc/pty'
 import { registerMetadataHandlers } from './ipc/metadata'
+import { registerClaudeHandlers } from './ipc/claude'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -44,6 +45,7 @@ app.whenReady().then(() => {
   registerScannerHandlers()
   registerPtyHandlers(() => mainWindow)
   registerMetadataHandlers()
+  registerClaudeHandlers()
   createWindow()
 
   app.on('activate', () => {

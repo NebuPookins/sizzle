@@ -30,6 +30,7 @@ declare global {
       ptyKill(id: string): Promise<void>
       onPtyData(callback: (id: string, data: string) => void): () => void
       onPtyExit(callback: (id: string, exitCode: number) => void): () => void
+      claudeHasSession(projectPath: string): Promise<boolean>
     }
   }
 }

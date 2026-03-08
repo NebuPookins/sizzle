@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { useAppStore } from '../../store/appStore'
 import type { LaunchTarget } from '../../store/appStore'
+import { getAgent } from '../../agents'
 import XtermPane from './XtermPane'
 import FileExplorerPane from './FileExplorerPane'
 
@@ -22,15 +23,25 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const [activeTopTab, setActiveTopTab] = useState<'terminal' | 'explorer' | string>('terminal')
   const [activeMarkdown, setActiveMarkdown] = useState<string | null>(null)
   const shell = window.sizzle.defaultShell || '/bin/bash'
-  const agentLabel = launchTarget === 'codex' ? 'Codex' : 'Claude Code'
-  const agentCommand = launchTarget === 'codex' ? 'codex' : 'claude'
-  const agentArgs = launchTarget === 'codex' ? [] : ['--continue']
+  const agent = getAgent(launchTarget)
+  const [agentArgs, setAgentArgs] = useState<string[] | null>(null)
   const shellQuote = (value: string) => {
     if (/^[A-Za-z0-9_./-]+$/.test(value)) return value
     return `'${value.replace(/'/g, `'\\''`)}'`
   }
-  const agentStartCommand = [agentCommand, ...agentArgs].map(shellQuote).join(' ')
   const tabName = (filePath: string) => filePath.split('/').pop() ?? filePath
+
+  useEffect(() => {
+    let isMounted = true
+    setAgentArgs(null)
+    agent.getArgs(projectPath).then((args) => {
+      if (!isMounted) return
+      setAgentArgs(args)
+    })
+    return () => {
+      isMounted = false
+    }
+  }, [projectPath, launchTarget])
 
   useEffect(() => {
     let isMounted = true
@@ -88,7 +99,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
         }}>
-          {agentLabel}
+          {agent.label}
         </div>
         <div style={{ display: 'flex', alignItems: 'stretch', minWidth: 0, overflowX: 'auto' }}>
           <button
@@ -176,16 +187,17 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
         display: activeTopTab === 'terminal' ? 'flex' : 'none',
         flexDirection: 'column',
       }}>
-        <XtermPane
-          key={`agent-${agentSession}`}
-          id={`${launchTarget}-${projectPath}-${agentSession}`}
-          cwd={projectPath}
-          command={shell}
-          args={['-i']}
-          initialCommand={agentStartCommand}
-          onStatusChange={(status) => setClaudeStatus(projectPath, status)}
-          onExit={() => setAgentExited(true)}
-        />
+        {agentArgs !== null && (
+          <XtermPane
+            key={`agent-${agentSession}`}
+            id={`${launchTarget}-${projectPath}-${agentSession}`}
+            cwd={projectPath}
+            command={agent.command}
+            args={agentArgs}
+            onStatusChange={(status) => setClaudeStatus(projectPath, status)}
+            onExit={() => setAgentExited(true)}
+          />
+        )}
       </div>
       <div style={{
         flex: 1,
