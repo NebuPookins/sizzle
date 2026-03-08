@@ -342,7 +342,7 @@ export default function MarkdownView({ project }: Props) {
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: activeFile === 'explorer' ? 'hidden' : 'auto', padding: activeFile === 'explorer' ? 0 : '20px 24px' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: activeFile === 'explorer' ? 'hidden' : 'auto', padding: activeFile === 'explorer' ? 0 : '20px 24px' }}>
         {activeFile === 'explorer' && (
           <FileExplorerPane projectPath={project.path} />
         )}
