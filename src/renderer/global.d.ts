@@ -25,7 +25,7 @@ declare global {
       setLastLaunched(projectPath: string): Promise<void>
       setTagOverride(projectPath: string, override: ProjectTagOverride | null): Promise<ProjectMeta>
       ptyCreate(id: string, cwd: string, command: string, args: string[]): Promise<void>
-      ptyWrite(id: string, data: string): Promise<void>
+      ptyWrite(id: string, data: string): void
       ptyResize(id: string, cols: number, rows: number): Promise<void>
       ptyKill(id: string): Promise<void>
       onPtyData(callback: (id: string, data: string) => void): () => void

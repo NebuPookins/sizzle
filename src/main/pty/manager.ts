@@ -10,9 +10,21 @@ try {
 
 interface PtyEntry {
   process: import('node-pty').IPty
+  win: BrowserWindow
+  pendingData: string
 }
 
 const ptys = new Map<string, PtyEntry>()
+
+// Flush buffered PTY data once per frame (~16ms) to reduce IPC overhead
+const flushInterval = setInterval(() => {
+  for (const [id, entry] of ptys) {
+    if (entry.pendingData && !entry.win.isDestroyed()) {
+      entry.win.webContents.send('pty:data', id, entry.pendingData)
+      entry.pendingData = ''
+    }
+  }
+}, 16)
 
 export function createPty(
   id: string,
@@ -37,9 +49,8 @@ export function createPty(
   })
 
   proc.onData((data: string) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('pty:data', id, data)
-    }
+    const entry = ptys.get(id)
+    if (entry) entry.pendingData += data
   })
 
   proc.onExit(({ exitCode }: { exitCode: number }) => {
@@ -49,7 +60,7 @@ export function createPty(
     }
   })
 
-  ptys.set(id, { process: proc })
+  ptys.set(id, { process: proc, win, pendingData: '' })
 }
 
 export function writePty(id: string, data: string): void {
@@ -71,6 +82,7 @@ export function killPty(id: string): void {
 }
 
 export function killAll(): void {
+  clearInterval(flushInterval)
   for (const id of ptys.keys()) {
     killPty(id)
   }

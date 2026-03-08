@@ -88,14 +88,21 @@ export default function XtermPane({
 
     // Status tracking for Claude pane
     let statusTimer: ReturnType<typeof setTimeout> | null = null
+    let currentStatus: 'working' | 'waiting' = 'waiting'
     const unsubData = window.sizzle.onPtyData((ptyId, data) => {
       if (ptyId !== id) return
       term.write(data)
 
       if (onStatusChange) {
-        onStatusChange('working')
+        if (currentStatus !== 'working') {
+          currentStatus = 'working'
+          onStatusChange('working')
+        }
         if (statusTimer) clearTimeout(statusTimer)
-        statusTimer = setTimeout(() => onStatusChange('waiting'), 1000)
+        statusTimer = setTimeout(() => {
+          currentStatus = 'waiting'
+          onStatusChange('waiting')
+        }, 1000)
       }
     })
 
@@ -105,19 +112,24 @@ export default function XtermPane({
       onExitRef.current?.()
     })
 
-    // Resize observer
+    // Resize observer — debounced to avoid flooding IPC during window drag
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null
     const observer = new ResizeObserver(() => {
-      if (!fitRef.current || !termRef.current) return
-      try {
-        fitRef.current.fit()
-        const { cols, rows } = termRef.current
-        window.sizzle.ptyResize(id, cols, rows)
-      } catch {}
+      if (resizeTimer) clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(() => {
+        if (!fitRef.current || !termRef.current) return
+        try {
+          fitRef.current.fit()
+          const { cols, rows } = termRef.current
+          window.sizzle.ptyResize(id, cols, rows)
+        } catch {}
+      }, 100)
     })
     if (containerRef.current) observer.observe(containerRef.current)
 
     return () => {
       if (statusTimer) clearTimeout(statusTimer)
+      if (resizeTimer) clearTimeout(resizeTimer)
       unsubData()
       unsubExit()
       disposeOnData.dispose()

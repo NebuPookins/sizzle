@@ -96,8 +96,8 @@ const api = {
   ptyCreate: (id: string, cwd: string, command: string, args: string[]): Promise<void> =>
     ipcRenderer.invoke('pty:create', id, cwd, command, args),
 
-  ptyWrite: (id: string, data: string): Promise<void> =>
-    ipcRenderer.invoke('pty:write', id, data),
+  ptyWrite: (id: string, data: string): void =>
+    ipcRenderer.send('pty:write', id, data),
 
   ptyResize: (id: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke('pty:resize', id, cols, rows),

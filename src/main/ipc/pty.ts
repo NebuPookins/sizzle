@@ -11,7 +11,7 @@ export function registerPtyHandlers(getWin: () => BrowserWindow | null): void {
     }
   )
 
-  ipcMain.handle('pty:write', async (_event, id: string, data: string) => {
+  ipcMain.on('pty:write', (_event, id: string, data: string) => {
     writePty(id, data)
   })
 
