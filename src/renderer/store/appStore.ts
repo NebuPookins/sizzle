@@ -25,6 +25,7 @@ interface AppState {
   setProjects(projects: Project[]): void
   selectProject(project: Project): void
   launchProject(project: Project, target: LaunchTarget): void
+  unlaunchProject(path: string): void
   setClaudeStatus(projectPath: string, status: ClaudeStatus): void
   setProjectTagOverride(projectPath: string, override: ProjectTagOverride | null): void
   setProjectDetectedTags(projectPath: string, detectedTags: ProjectTag[]): void
@@ -63,6 +64,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedProject: { ...project, lastLaunched: now },
       launchedProjects: newLaunched,
       launchTargets: { ...launchTargets, [project.path]: target },
+    })
+  },
+
+  unlaunchProject(path) {
+    set((state) => {
+      const newLaunched = new Set(state.launchedProjects)
+      newLaunched.delete(path)
+      const { [path]: _cs, ...claudeStatus } = state.claudeStatus
+      const { [path]: _lt, ...launchTargets } = state.launchTargets
+      return { launchedProjects: newLaunched, claudeStatus, launchTargets }
     })
   },
 

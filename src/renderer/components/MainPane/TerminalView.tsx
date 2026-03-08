@@ -14,7 +14,7 @@ interface Props {
 }
 
 export default function TerminalView({ projectPath, launchTarget }: Props) {
-  const { setClaudeStatus } = useAppStore()
+  const { setClaudeStatus, unlaunchProject } = useAppStore()
   const [agentExited, setAgentExited] = useState(false)
   const [agentSession, setAgentSession] = useState(0)
   const [shellExited, setShellExited] = useState(false)
@@ -30,6 +30,12 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     return `'${value.replace(/'/g, `'\\''`)}'`
   }
   const tabName = (filePath: string) => filePath.split('/').pop() ?? filePath
+
+  useEffect(() => {
+    if (!agentExited || !shellExited) return
+    const timer = setTimeout(() => unlaunchProject(projectPath), 2000)
+    return () => clearTimeout(timer)
+  }, [agentExited, shellExited])
 
   useEffect(() => {
     let isMounted = true
@@ -157,6 +163,27 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           </button>
         </div>
         <div style={{ flex: 1 }} />
+        <button
+          onClick={() => {
+            window.sizzle.ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
+            window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+            unlaunchProject(projectPath)
+          }}
+          style={{
+            marginRight: 8,
+            padding: '3px 9px',
+            fontSize: 11,
+            fontWeight: 600,
+            borderRadius: 4,
+            border: '1px solid #5a2020',
+            background: '#2a1010',
+            color: '#c07070',
+            cursor: 'pointer',
+            letterSpacing: '0.03em',
+          }}
+        >
+          ■ Stop
+        </button>
         {agentExited && (
           <button
             onClick={() => {
