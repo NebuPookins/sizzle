@@ -10,6 +10,7 @@ interface Props {
   args: string[]
   initialCommand?: string
   onStatusChange?: (status: 'working' | 'waiting') => void
+  onExit?: () => void
 }
 
 export default function XtermPane({
@@ -19,10 +20,16 @@ export default function XtermPane({
   args,
   initialCommand,
   onStatusChange,
+  onExit,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const onExitRef = useRef(onExit)
+
+  useEffect(() => {
+    onExitRef.current = onExit
+  }, [onExit])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -95,6 +102,7 @@ export default function XtermPane({
     const unsubExit = window.sizzle.onPtyExit((ptyId) => {
       if (ptyId !== id) return
       term.write('\r\n\x1b[90m[Process exited]\x1b[0m\r\n')
+      onExitRef.current?.()
     })
 
     // Resize observer
