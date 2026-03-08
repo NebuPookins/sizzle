@@ -2,6 +2,7 @@ import { dialog, ipcMain } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import { scanForProjects } from '../scanner'
+import { detectProjectTags } from '../scanner/tags'
 import { getScanSettings, setScanSettings } from '../store/metadata'
 const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 const MAX_MEDIA_PREVIEW_BYTES = 30 * 1024 * 1024
@@ -87,6 +88,10 @@ export function registerScannerHandlers(): void {
       }
     }
     return Array.from(deduped.values())
+  })
+
+  ipcMain.handle('scanner:rescanProject', async (_event, projectPath: string) => {
+    return detectProjectTags(projectPath)
   })
 
   ipcMain.handle('scanner:getSettings', async () => {

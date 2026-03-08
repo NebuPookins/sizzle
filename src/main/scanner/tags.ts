@@ -48,6 +48,7 @@ const EXTENSION_LANGUAGES: Record<string, string> = {
   '.lua': 'Lua',
   '.r': 'R',
   '.jl': 'Julia',
+  '.d': 'D',
 }
 
 interface FrameworkRule {
@@ -76,6 +77,7 @@ const FRAMEWORK_RULES: FrameworkRule[] = [
   { tag: 'FastAPI', manifests: ['requirements.txt', 'pyproject.toml'] },
   { tag: 'Spring', manifests: ['pom.xml', 'build.gradle', 'build.gradle.kts'] },
   { tag: 'Ruby on Rails', files: ['config.ru'], manifests: ['Gemfile'] },
+  { tag: 'raylib', files: ['raylib.h'], manifests: ['dub.json', 'dub.sdl', 'CMakeLists.txt'] },
 ]
 
 function clamp01(value: number): number {
@@ -176,6 +178,8 @@ function applyManifestSignals(rootDir: string, scores: Map<string, number>): voi
     { file: 'mix.exs', tag: 'Elixir', score: 0.85 },
     { file: 'project.clj', tag: 'Clojure', score: 0.85 },
     { file: 'deps.edn', tag: 'Clojure', score: 0.7 },
+    { file: 'dub.json', tag: 'D', score: 0.85 },
+    { file: 'dub.sdl', tag: 'D', score: 0.85 },
   ]
 
   for (const signal of manifestSignals) {
@@ -208,6 +212,12 @@ function applyFrameworkSignals(rootDir: string, fileNames: Set<string>, packageN
       )) {
         value += 0.7
       } else if (rule.tag === 'Ruby on Rails' && hasTextInFile(path.join(rootDir, 'Gemfile'), /rails/i)) {
+        value += 0.8
+      } else if (rule.tag === 'raylib' && (
+        hasTextInFile(path.join(rootDir, 'dub.json'), /raylib/i)
+        || hasTextInFile(path.join(rootDir, 'dub.sdl'), /raylib/i)
+        || hasTextInFile(path.join(rootDir, 'CMakeLists.txt'), /raylib/i)
+      )) {
         value += 0.8
       }
     }

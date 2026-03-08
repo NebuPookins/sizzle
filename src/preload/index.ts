@@ -51,6 +51,9 @@ const api = {
   scanProjects: (): Promise<ScannedProject[]> =>
     ipcRenderer.invoke('scanner:scan'),
 
+  rescanProjectTags: (projectPath: string): Promise<ProjectTag[]> =>
+    ipcRenderer.invoke('scanner:rescanProject', projectPath),
+
   getScanSettings: (): Promise<ScanSettings> =>
     ipcRenderer.invoke('scanner:getSettings'),
 

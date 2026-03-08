@@ -27,6 +27,7 @@ interface AppState {
   launchProject(project: Project, target: LaunchTarget): void
   setClaudeStatus(projectPath: string, status: ClaudeStatus): void
   setProjectTagOverride(projectPath: string, override: ProjectTagOverride | null): void
+  setProjectDetectedTags(projectPath: string, detectedTags: ProjectTag[]): void
   sortedProjects(): Project[]
 }
 
@@ -89,6 +90,23 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const selectedProject = state.selectedProject?.path === projectPath
         ? projects.find((project) => project.path === projectPath) ?? null
+        : state.selectedProject
+
+      return { projects, selectedProject }
+    })
+  },
+
+  setProjectDetectedTags(projectPath, detectedTags) {
+    set((state) => {
+      const projects = state.projects.map((project) => {
+        if (project.path !== projectPath) return project
+        const tags = (project.tagOverride?.tags ?? detectedTags).slice().sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+        const primaryTag = project.tagOverride?.primaryTag ?? tags[0]?.name ?? null
+        return { ...project, detectedTags, tags, primaryTag }
+      })
+
+      const selectedProject = state.selectedProject?.path === projectPath
+        ? projects.find((p) => p.path === projectPath) ?? null
         : state.selectedProject
 
       return { projects, selectedProject }

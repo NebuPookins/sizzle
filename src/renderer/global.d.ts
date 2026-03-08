@@ -1,5 +1,6 @@
 import type {
   ScannedProject,
+  ProjectTag,
   ProjectMeta,
   ProjectTagOverride,
   FileSystemEntry,
@@ -12,6 +13,7 @@ declare global {
     sizzle: {
       defaultShell: string
       scanProjects(): Promise<ScannedProject[]>
+      rescanProjectTags(projectPath: string): Promise<ProjectTag[]>
       getScanSettings(): Promise<ScanSettings>
       setScanSettings(settings: ScanSettings): Promise<ScanSettings>
       addIgnoreRoot(rootPath: string): Promise<ScanSettings>

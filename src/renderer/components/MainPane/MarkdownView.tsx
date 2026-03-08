@@ -17,7 +17,7 @@ export default function MarkdownView({ project }: Props) {
   const [isEditingTags, setIsEditingTags] = useState(false)
   const [tagInput, setTagInput] = useState('')
   const [primaryTagInput, setPrimaryTagInput] = useState('')
-  const { launchProject, setProjectTagOverride } = useAppStore()
+  const { launchProject, setProjectTagOverride, setProjectDetectedTags } = useAppStore()
 
   useEffect(() => {
     setFiles([])
@@ -68,7 +68,8 @@ export default function MarkdownView({ project }: Props) {
   async function saveTagOverride() {
     const tagNames = parseTagList(tagInput)
     if (tagNames.length === 0) {
-      const updated = await window.sizzle.setTagOverride(project.path, null)
+      const override: ProjectTagOverride = { tags: [], primaryTag: null }
+      const updated = await window.sizzle.setTagOverride(project.path, override)
       setProjectTagOverride(project.path, updated.tagOverride)
       setIsEditingTags(false)
       return
@@ -95,10 +96,14 @@ export default function MarkdownView({ project }: Props) {
   }
 
   async function clearTagOverride() {
-    const updated = await window.sizzle.setTagOverride(project.path, null)
+    const [updated, freshTags] = await Promise.all([
+      window.sizzle.setTagOverride(project.path, null),
+      window.sizzle.rescanProjectTags(project.path),
+    ])
+    setProjectDetectedTags(project.path, freshTags)
     setProjectTagOverride(project.path, updated.tagOverride)
-    setTagInput(project.detectedTags.map((tag) => tag.name).join(', '))
-    setPrimaryTagInput(project.detectedTags[0]?.name ?? '')
+    setTagInput(freshTags.map((tag) => tag.name).join(', '))
+    setPrimaryTagInput(freshTags[0]?.name ?? '')
     setIsEditingTags(false)
   }
 
