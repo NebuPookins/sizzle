@@ -9,10 +9,15 @@ interface Props {
 
 export default function TerminalView({ projectPath, launchTarget }: Props) {
   const { setClaudeStatus } = useAppStore()
-  const shell = '/bin/bash'
+  const shell = window.sizzle.defaultShell || '/bin/bash'
   const agentLabel = launchTarget === 'codex' ? 'Codex' : 'Claude Code'
   const agentCommand = launchTarget === 'codex' ? 'codex' : 'claude'
   const agentArgs = launchTarget === 'codex' ? [] : ['--continue']
+  const shellQuote = (value: string) => {
+    if (/^[A-Za-z0-9_./-]+$/.test(value)) return value
+    return `'${value.replace(/'/g, `'\\''`)}'`
+  }
+  const agentStartCommand = [agentCommand, ...agentArgs].map(shellQuote).join(' ')
 
   return (
     <div style={{
@@ -46,8 +51,9 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
         <XtermPane
           id={`${launchTarget}-${projectPath}`}
           cwd={projectPath}
-          command={agentCommand}
-          args={agentArgs}
+          command={shell}
+          args={['-i']}
+          initialCommand={agentStartCommand}
           onStatusChange={(status) => setClaudeStatus(projectPath, status)}
         />
       </div>

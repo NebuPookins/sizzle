@@ -3,6 +3,7 @@ import type { ScannedProject, ProjectMeta } from '../preload/index'
 declare global {
   interface Window {
     sizzle: {
+      defaultShell: string
       scanProjects(): Promise<ScannedProject[]>
       getMarkdownFiles(projectPath: string): Promise<string[]>
       readMarkdownFile(filePath: string): Promise<string | null>

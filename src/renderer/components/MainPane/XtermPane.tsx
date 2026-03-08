@@ -8,10 +8,18 @@ interface Props {
   cwd: string
   command: string
   args: string[]
+  initialCommand?: string
   onStatusChange?: (status: 'working' | 'waiting') => void
 }
 
-export default function XtermPane({ id, cwd, command, args, onStatusChange }: Props) {
+export default function XtermPane({
+  id,
+  cwd,
+  command,
+  args,
+  initialCommand,
+  onStatusChange,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -56,7 +64,11 @@ export default function XtermPane({ id, cwd, command, args, onStatusChange }: Pr
     // Must fit before spawn so we send correct initial dimensions
     requestAnimationFrame(() => {
       fitAddon.fit()
-      window.sizzle.ptyCreate(id, cwd, command, args)
+      window.sizzle.ptyCreate(id, cwd, command, args).then(() => {
+        if (!initialCommand) return
+        // Write after spawn so the shell runs the requested command immediately.
+        window.sizzle.ptyWrite(id, `${initialCommand}\r`)
+      })
     })
 
     termRef.current = term
@@ -108,7 +120,7 @@ export default function XtermPane({ id, cwd, command, args, onStatusChange }: Pr
       fitRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, cwd, command])
+  }, [id, cwd, command, initialCommand])
 
   return (
     <div

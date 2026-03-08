@@ -11,6 +11,8 @@ export interface ProjectMeta {
 }
 
 const api = {
+  defaultShell: process.env.SHELL || process.env.COMSPEC || '/bin/bash',
+
   // Scanner
   scanProjects: (): Promise<ScannedProject[]> =>
     ipcRenderer.invoke('scanner:scan'),
