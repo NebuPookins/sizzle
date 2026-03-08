@@ -13,6 +13,7 @@ export interface ProjectMeta {
 export interface ScanSettings {
   scanRoots: string[]
   ignoreRoots: string[]
+  manualProjectRoots: string[]
 }
 
 export interface FileSystemEntry {

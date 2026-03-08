@@ -13,6 +13,7 @@ interface ProjectMeta {
 export interface ScanSettings {
   scanRoots: string[]
   ignoreRoots: string[]
+  manualProjectRoots: string[]
 }
 
 interface DB {
@@ -42,9 +43,11 @@ function sanitizeRootList(values: unknown): string[] {
 function getNormalizedScanSettings(db: DB): ScanSettings {
   const scanRoots = sanitizeRootList(db.scanSettings?.scanRoots)
   const ignoreRoots = sanitizeRootList(db.scanSettings?.ignoreRoots)
+  const manualProjectRoots = sanitizeRootList(db.scanSettings?.manualProjectRoots)
   return {
     scanRoots: scanRoots.length > 0 ? scanRoots : [DEFAULT_SCAN_ROOT],
     ignoreRoots,
+    manualProjectRoots,
   }
 }
 
@@ -98,8 +101,10 @@ export function getScanSettings(): ScanSettings {
     !db.scanSettings
     || db.scanSettings.scanRoots?.length !== normalized.scanRoots.length
     || db.scanSettings.ignoreRoots?.length !== normalized.ignoreRoots.length
+    || db.scanSettings.manualProjectRoots?.length !== normalized.manualProjectRoots.length
     || db.scanSettings.scanRoots?.some((value, index) => value !== normalized.scanRoots[index])
     || db.scanSettings.ignoreRoots?.some((value, index) => value !== normalized.ignoreRoots[index])
+    || db.scanSettings.manualProjectRoots?.some((value, index) => value !== normalized.manualProjectRoots[index])
   ) {
     db.scanSettings = normalized
     writeDB(db)
@@ -112,6 +117,7 @@ export function setScanSettings(settings: ScanSettings): ScanSettings {
   const normalized: ScanSettings = {
     scanRoots: sanitizeRootList(settings.scanRoots),
     ignoreRoots: sanitizeRootList(settings.ignoreRoots),
+    manualProjectRoots: sanitizeRootList(settings.manualProjectRoots),
   }
   if (normalized.scanRoots.length === 0) {
     normalized.scanRoots = [DEFAULT_SCAN_ROOT]

@@ -75,7 +75,11 @@ function isLikelyTextBuffer(buffer: Buffer): boolean {
 export function registerScannerHandlers(): void {
   ipcMain.handle('scanner:scan', async () => {
     const settings = getScanSettings()
-    const scanned = await scanForProjects(settings.scanRoots, settings.ignoreRoots)
+    const scanned = await scanForProjects(
+      settings.scanRoots,
+      settings.ignoreRoots,
+      settings.manualProjectRoots,
+    )
     const deduped = new Map<string, (typeof scanned)[number]>()
     for (const project of scanned) {
       if (!deduped.has(project.path)) {
@@ -89,14 +93,24 @@ export function registerScannerHandlers(): void {
     return getScanSettings()
   })
 
-  ipcMain.handle('scanner:setSettings', async (_event, settings: { scanRoots: string[]; ignoreRoots: string[] }) => {
-    return setScanSettings(settings)
-  })
+  ipcMain.handle(
+    'scanner:setSettings',
+    async (
+      _event,
+      settings: { scanRoots: string[]; ignoreRoots: string[]; manualProjectRoots: string[] },
+    ) => {
+      return setScanSettings(settings)
+    },
+  )
 
   ipcMain.handle('scanner:addIgnoreRoot', async (_event, rootPath: string) => {
     const current = getScanSettings()
     const nextIgnoreRoots = [...current.ignoreRoots, rootPath]
-    return setScanSettings({ scanRoots: current.scanRoots, ignoreRoots: nextIgnoreRoots })
+    return setScanSettings({
+      scanRoots: current.scanRoots,
+      ignoreRoots: nextIgnoreRoots,
+      manualProjectRoots: current.manualProjectRoots,
+    })
   })
 
   ipcMain.handle('scanner:pickDirectory', async () => {

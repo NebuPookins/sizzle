@@ -18,8 +18,10 @@ function uniqPaths(paths: string[]): string[] {
 export default function ScanSettingsDialog({ isOpen, onClose, onSaved }: Props) {
   const [scanRoots, setScanRoots] = useState<string[]>([])
   const [ignoreRoots, setIgnoreRoots] = useState<string[]>([])
+  const [manualProjectRoots, setManualProjectRoots] = useState<string[]>([])
   const [newScanRoot, setNewScanRoot] = useState('')
   const [newIgnoreRoot, setNewIgnoreRoot] = useState('')
+  const [newManualProjectRoot, setNewManualProjectRoot] = useState('')
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
 
@@ -30,6 +32,7 @@ export default function ScanSettingsDialog({ isOpen, onClose, onSaved }: Props) 
       .then((settings: ScanSettings) => {
         setScanRoots(settings.scanRoots)
         setIgnoreRoots(settings.ignoreRoots)
+        setManualProjectRoots(settings.manualProjectRoots)
       })
       .finally(() => setLoading(false))
   }, [isOpen])
@@ -50,11 +53,22 @@ export default function ScanSettingsDialog({ isOpen, onClose, onSaved }: Props) 
     setNewIgnoreRoot('')
   }
 
-  const browseFor = async (target: 'scan' | 'ignore') => {
+  const addManualProjectRoot = () => {
+    const normalized = normalizeInputPath(newManualProjectRoot)
+    if (!normalized) return
+    setManualProjectRoots((value) => uniqPaths([...value, normalized]))
+    setNewManualProjectRoot('')
+  }
+
+  const browseFor = async (target: 'scan' | 'ignore' | 'manual') => {
     const picked = await window.sizzle.pickDirectory()
     if (!picked) return
     if (target === 'scan') {
       setNewScanRoot(picked)
+      return
+    }
+    if (target === 'manual') {
+      setNewManualProjectRoot(picked)
       return
     }
     setNewIgnoreRoot(picked)
@@ -63,7 +77,7 @@ export default function ScanSettingsDialog({ isOpen, onClose, onSaved }: Props) 
   const save = async () => {
     setSaving(true)
     try {
-      await window.sizzle.setScanSettings({ scanRoots, ignoreRoots })
+      await window.sizzle.setScanSettings({ scanRoots, ignoreRoots, manualProjectRoots })
       await onSaved()
       onClose()
     } finally {
@@ -204,6 +218,62 @@ export default function ScanSettingsDialog({ isOpen, onClose, onSaved }: Props) 
                   Browse
                 </button>
                 <button onClick={addIgnoreRoot} style={{ padding: '7px 10px', cursor: 'pointer' }}>
+                  Add
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>Manual project roots</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                Manually marked roots take precedence. Detected projects inside these folders will be treated as
+                subfolders instead.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {manualProjectRoots.map((root) => (
+                  <div
+                    key={root}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '6px 8px',
+                      borderRadius: 6,
+                      background: 'var(--bg-dark)',
+                      border: '1px solid var(--border)',
+                      fontSize: 12,
+                    }}
+                  >
+                    <span style={{ wordBreak: 'break-all' }}>{root}</span>
+                    <button
+                      onClick={() => setManualProjectRoots((value) => value.filter((path) => path !== root))}
+                      style={{ padding: '3px 8px', cursor: 'pointer' }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  value={newManualProjectRoot}
+                  onChange={(event) => setNewManualProjectRoot(event.target.value)}
+                  placeholder="Add manual project root"
+                  style={{
+                    flex: 1,
+                    border: '1px solid var(--border)',
+                    borderRadius: 6,
+                    background: 'var(--bg-dark)',
+                    color: 'var(--text-primary)',
+                    padding: '7px 8px',
+                    fontSize: 12,
+                  }}
+                />
+                <button onClick={() => browseFor('manual')} style={{ padding: '7px 10px', cursor: 'pointer' }}>
+                  Browse
+                </button>
+                <button onClick={addManualProjectRoot} style={{ padding: '7px 10px', cursor: 'pointer' }}>
                   Add
                 </button>
               </div>

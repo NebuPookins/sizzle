@@ -23,8 +23,36 @@ function shouldSkipByIgnoreRoots(dir: string, ignoreRoots: string[]): boolean {
   return ignoreRoots.some((ignoreRoot) => isPathWithinRoot(ignoreRoot, dir))
 }
 
-async function scanDir(dir: string, ignoreRoots: string[], results: ScannedProject[]): Promise<void> {
+function isUnderManualRoot(dir: string, manualProjectRoots: Set<string>): boolean {
+  for (const manualRoot of manualProjectRoots) {
+    if (dir === manualRoot) continue
+    if (isPathWithinRoot(manualRoot, dir)) return true
+  }
+  return false
+}
+
+function collectReadmeFiles(dir: string, entries: fs.Dirent[]): string[] {
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().startsWith('readme'))
+    .map((entry) => path.join(dir, entry.name))
+}
+
+function tryReadDirEntries(dir: string): fs.Dirent[] | null {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return null
+  }
+}
+
+async function scanDir(
+  dir: string,
+  ignoreRoots: string[],
+  manualProjectRoots: Set<string>,
+  results: ScannedProject[],
+): Promise<void> {
   if (shouldSkipByIgnoreRoots(dir, ignoreRoots)) return
+  if (isUnderManualRoot(dir, manualProjectRoots)) return
 
   let entries: fs.Dirent[]
   try {
@@ -33,10 +61,8 @@ async function scanDir(dir: string, ignoreRoots: string[], results: ScannedProje
     return
   }
 
-  if (isProjectRoot(dir)) {
-    const readmeFiles = entries
-      .filter((e) => e.isFile() && e.name.toLowerCase().startsWith('readme'))
-      .map((e) => path.join(dir, e.name))
+  if (manualProjectRoots.has(dir) || isProjectRoot(dir)) {
+    const readmeFiles = collectReadmeFiles(dir, entries)
 
     results.push({
       name: path.basename(dir),
@@ -51,12 +77,30 @@ async function scanDir(dir: string, ignoreRoots: string[], results: ScannedProje
   )
 
   await Promise.all(
-    subdirs.map((e) => scanDir(path.join(dir, e.name), ignoreRoots, results))
+    subdirs.map((e) => scanDir(path.join(dir, e.name), ignoreRoots, manualProjectRoots, results))
   )
 }
 
-export async function scanForProjects(rootDirs: string[], ignoreRoots: string[]): Promise<ScannedProject[]> {
+export async function scanForProjects(
+  rootDirs: string[],
+  ignoreRoots: string[],
+  manualProjectRoots: string[] = [],
+): Promise<ScannedProject[]> {
   const results: ScannedProject[] = []
-  await Promise.all(rootDirs.map((rootDir) => scanDir(rootDir, ignoreRoots, results)))
+  const normalizedManualRoots = new Set(
+    manualProjectRoots.filter((manualRoot) => !shouldSkipByIgnoreRoots(manualRoot, ignoreRoots)),
+  )
+
+  for (const manualRoot of normalizedManualRoots) {
+    const entries = tryReadDirEntries(manualRoot)
+    if (!entries) continue
+    results.push({
+      name: path.basename(manualRoot),
+      path: manualRoot,
+      readmeFiles: collectReadmeFiles(manualRoot, entries),
+    })
+  }
+
+  await Promise.all(rootDirs.map((rootDir) => scanDir(rootDir, ignoreRoots, normalizedManualRoots, results)))
   return results
 }
