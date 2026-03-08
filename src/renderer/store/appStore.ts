@@ -7,17 +7,19 @@ export interface Project {
   lastLaunched: number | null
 }
 
+export type LaunchTarget = 'claude' | 'codex'
 type ClaudeStatus = 'working' | 'waiting'
 
 interface AppState {
   projects: Project[]
   selectedProject: Project | null
   launchedProjects: Set<string>
+  launchTargets: Record<string, LaunchTarget>
   claudeStatus: Record<string, ClaudeStatus>
 
   setProjects(projects: Project[]): void
   selectProject(project: Project): void
-  launchProject(project: Project): void
+  launchProject(project: Project, target: LaunchTarget): void
   setClaudeStatus(projectPath: string, status: ClaudeStatus): void
   sortedProjects(): Project[]
 }
@@ -26,6 +28,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   selectedProject: null,
   launchedProjects: new Set(),
+  launchTargets: {},
   claudeStatus: {},
 
   setProjects(projects) {
@@ -36,8 +39,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ selectedProject: project })
   },
 
-  launchProject(project) {
-    const { launchedProjects, projects } = get()
+  launchProject(project, target) {
+    const { launchedProjects, projects, launchTargets } = get()
     const now = Date.now()
     const updated = projects.map((p) =>
       p.path === project.path ? { ...p, lastLaunched: now } : p
@@ -48,6 +51,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       projects: updated,
       selectedProject: { ...project, lastLaunched: now },
       launchedProjects: newLaunched,
+      launchTargets: { ...launchTargets, [project.path]: target },
     })
   },
 

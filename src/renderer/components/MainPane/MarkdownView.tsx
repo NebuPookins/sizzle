@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { Project, useAppStore } from '../../store/appStore'
+import { LaunchTarget, Project, useAppStore } from '../../store/appStore'
 
 interface Props {
   project: Project
@@ -33,9 +33,9 @@ export default function MarkdownView({ project }: Props) {
     })
   }, [activeFile])
 
-  async function handleLaunch() {
+  async function handleLaunch(target: LaunchTarget) {
     await window.sizzle.setLastLaunched(project.path)
-    launchProject(project)
+    launchProject(project, target)
   }
 
   const tabName = (f: string) => f.split('/').pop() ?? f
@@ -54,7 +54,7 @@ export default function MarkdownView({ project }: Props) {
         <div style={{ fontWeight: 700, fontSize: 16, flex: 1 }}>{project.name}</div>
         <div style={{ fontSize: 11, color: 'var(--text-muted)', flex: 1 }}>{project.path}</div>
         <button
-          onClick={handleLaunch}
+          onClick={() => handleLaunch('claude')}
           style={{
             background: 'var(--accent)',
             color: '#fff',
@@ -69,7 +69,25 @@ export default function MarkdownView({ project }: Props) {
           onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-hover)' }}
           onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)' }}
         >
-          Launch
+          Launch Claude
+        </button>
+        <button
+          onClick={() => handleLaunch('codex')}
+          style={{
+            background: 'var(--bg-hover)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            padding: '7px 14px',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            flexShrink: 0,
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-selected)' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)' }}
+        >
+          Launch Codex
         </button>
       </div>
 

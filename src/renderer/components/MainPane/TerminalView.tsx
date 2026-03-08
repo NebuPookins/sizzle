@@ -1,13 +1,18 @@
 import { useAppStore } from '../../store/appStore'
+import type { LaunchTarget } from '../../store/appStore'
 import XtermPane from './XtermPane'
 
 interface Props {
   projectPath: string
+  launchTarget: LaunchTarget
 }
 
-export default function TerminalView({ projectPath }: Props) {
+export default function TerminalView({ projectPath, launchTarget }: Props) {
   const { setClaudeStatus } = useAppStore()
   const shell = '/bin/bash'
+  const agentLabel = launchTarget === 'codex' ? 'Codex' : 'Claude Code'
+  const agentCommand = launchTarget === 'codex' ? 'codex' : 'claude'
+  const agentArgs = launchTarget === 'codex' ? [] : ['--continue']
 
   return (
     <div style={{
@@ -32,17 +37,17 @@ export default function TerminalView({ projectPath }: Props) {
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
         }}>
-          Claude Code
+          {agentLabel}
         </div>
       </div>
 
-      {/* Claude terminal */}
+      {/* Agent terminal */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <XtermPane
-          id={`claude-${projectPath}`}
+          id={`${launchTarget}-${projectPath}`}
           cwd={projectPath}
-          command="claude"
-          args={['--continue']}
+          command={agentCommand}
+          args={agentArgs}
           onStatusChange={(status) => setClaudeStatus(projectPath, status)}
         />
       </div>
