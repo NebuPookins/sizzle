@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Project, useAppStore } from '../../store/appStore'
+import type { ProjectMarker } from '../../../preload'
 import ProjectItem from './ProjectItem'
 import ScanSettingsDialog from './ScanSettingsDialog'
 
@@ -14,7 +15,7 @@ interface ContextMenuState {
 }
 
 export default function LeftPane({ onRefreshProjects }: Props) {
-  const { selectedProject, launchedProjects, sortedProjects } = useAppStore()
+  const { selectedProject, launchedProjects, sortedProjects, setProjectMarker } = useAppStore()
   const [search, setSearch] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -45,6 +46,23 @@ export default function LeftPane({ onRefreshProjects }: Props) {
     await window.sizzle.addIgnoreRoot(contextMenu.project.path)
     await onRefreshProjects()
     setContextMenu(null)
+  }
+
+  const handleMarkerChange = async (project: Project, marker: ProjectMarker) => {
+    const previousMarker = project.marker
+    setProjectMarker(project.path, marker)
+
+    try {
+      const persistMarker = window.sizzle.setProjectMarker
+      if (typeof persistMarker !== 'function') {
+        throw new Error('setProjectMarker bridge unavailable')
+      }
+      const updated = await persistMarker(project.path, marker)
+      setProjectMarker(project.path, updated.marker)
+    } catch (error) {
+      console.error('Failed to persist project marker', error)
+      setProjectMarker(project.path, previousMarker)
+    }
   }
 
   return (
@@ -96,6 +114,7 @@ export default function LeftPane({ onRefreshProjects }: Props) {
             project={project}
             isSelected={selectedProject?.path === project.path}
             isLaunched={launchedProjects.has(project.path)}
+            onMarkerChange={handleMarkerChange}
             onContextMenuRequest={(menuProject, x, y) => setContextMenu({ project: menuProject, x, y })}
           />
         ))}

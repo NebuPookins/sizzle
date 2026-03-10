@@ -9,7 +9,10 @@ const TMP_PATH = path.join(CONFIG_DIR, 'db.json.tmp')
 interface ProjectMeta {
   lastLaunched: number | null
   tagOverride: ProjectTagOverride | null
+  marker: ProjectMarker
 }
+
+export type ProjectMarker = 'favorite' | 'ignored' | null
 
 export interface ProjectTag {
   name: string
@@ -99,13 +102,18 @@ function pruneMissingProjects(db: DB): boolean {
 
 export function getMetadata(projectPath: string): ProjectMeta {
   const db = readDB()
-  return db.projects[projectPath] ?? { lastLaunched: null, tagOverride: null }
+  const meta = db.projects[projectPath]
+  if (!meta) return { lastLaunched: null, tagOverride: null, marker: null }
+  return {
+    ...meta,
+    marker: normalizeMarker(meta.marker),
+  }
 }
 
 export function setLastLaunched(projectPath: string): void {
   const db = readDB()
   if (!db.projects[projectPath]) {
-    db.projects[projectPath] = { lastLaunched: null, tagOverride: null }
+    db.projects[projectPath] = { lastLaunched: null, tagOverride: null, marker: null }
   }
   db.projects[projectPath].lastLaunched = Date.now()
   writeDB(db)
@@ -120,11 +128,20 @@ export function getAllMetadata(): Record<string, ProjectMeta> {
       db.projects[projectPath].tagOverride = null
       normalized = true
     }
+    const normalizedMarker = normalizeMarker(db.projects[projectPath].marker)
+    if (db.projects[projectPath].marker !== normalizedMarker) {
+      db.projects[projectPath].marker = normalizedMarker
+      normalized = true
+    }
   }
   if (normalized) {
     writeDB(db)
   }
   return db.projects
+}
+
+function normalizeMarker(value: unknown): ProjectMarker {
+  return value === 'favorite' || value === 'ignored' ? value : null
 }
 
 function sanitizeTagName(value: string): string {
@@ -166,9 +183,20 @@ function normalizeTagOverride(value: ProjectTagOverride): ProjectTagOverride {
 export function setTagOverride(projectPath: string, override: ProjectTagOverride | null): ProjectMeta {
   const db = readDB()
   if (!db.projects[projectPath]) {
-    db.projects[projectPath] = { lastLaunched: null, tagOverride: null }
+    db.projects[projectPath] = { lastLaunched: null, tagOverride: null, marker: null }
   }
   db.projects[projectPath].tagOverride = override ? normalizeTagOverride(override) : null
+  db.projects[projectPath].marker = normalizeMarker(db.projects[projectPath].marker)
+  writeDB(db)
+  return db.projects[projectPath]
+}
+
+export function setProjectMarker(projectPath: string, marker: ProjectMarker): ProjectMeta {
+  const db = readDB()
+  if (!db.projects[projectPath]) {
+    db.projects[projectPath] = { lastLaunched: null, tagOverride: null, marker: null }
+  }
+  db.projects[projectPath].marker = normalizeMarker(marker)
   writeDB(db)
   return db.projects[projectPath]
 }

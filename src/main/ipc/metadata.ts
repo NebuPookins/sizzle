@@ -1,5 +1,13 @@
 import { ipcMain } from 'electron'
-import { getMetadata, setLastLaunched, getAllMetadata, setTagOverride, ProjectTagOverride } from '../store/metadata'
+import {
+  getMetadata,
+  setLastLaunched,
+  getAllMetadata,
+  setTagOverride,
+  setProjectMarker,
+  ProjectMarker,
+  ProjectTagOverride,
+} from '../store/metadata'
 
 export function registerMetadataHandlers(): void {
   ipcMain.handle('metadata:get', async (_event, projectPath: string) => {
@@ -16,5 +24,9 @@ export function registerMetadataHandlers(): void {
 
   ipcMain.handle('metadata:setTagOverride', async (_event, projectPath: string, override: ProjectTagOverride | null) => {
     return setTagOverride(projectPath, override)
+  })
+
+  ipcMain.handle('metadata:setProjectMarker', async (_event, projectPath: string, marker: ProjectMarker) => {
+    return setProjectMarker(projectPath, marker)
   })
 }

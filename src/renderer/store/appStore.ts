@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ProjectTag, ProjectTagOverride } from '../../preload'
+import type { ProjectMarker, ProjectTag, ProjectTagOverride } from '../../preload'
 
 export interface Project {
   name: string
@@ -10,6 +10,7 @@ export interface Project {
   tags: ProjectTag[]
   primaryTag: string | null
   tagOverride: ProjectTagOverride | null
+  marker: ProjectMarker
 }
 
 export type LaunchTarget = 'claude' | 'codex' | 'shell'
@@ -28,6 +29,7 @@ interface AppState {
   unlaunchProject(path: string): void
   setClaudeStatus(projectPath: string, status: ClaudeStatus): void
   setProjectTagOverride(projectPath: string, override: ProjectTagOverride | null): void
+  setProjectMarker(projectPath: string, marker: ProjectMarker): void
   setProjectDetectedTags(projectPath: string, detectedTags: ProjectTag[]): void
   sortedProjects(): Project[]
 }
@@ -110,6 +112,20 @@ export const useAppStore = create<AppState>((set, get) => ({
           primaryTag,
         }
       })
+
+      const selectedProject = state.selectedProject?.path === projectPath
+        ? projects.find((project) => project.path === projectPath) ?? null
+        : state.selectedProject
+
+      return { projects, selectedProject }
+    })
+  },
+
+  setProjectMarker(projectPath, marker) {
+    set((state) => {
+      const projects = state.projects.map((project) =>
+        project.path === projectPath ? { ...project, marker } : project,
+      )
 
       const selectedProject = state.selectedProject?.path === projectPath
         ? projects.find((project) => project.path === projectPath) ?? null

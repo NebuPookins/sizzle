@@ -2,6 +2,7 @@ import type {
   ScannedProject,
   ProjectTag,
   ProjectMeta,
+  ProjectMarker,
   ProjectTagOverride,
   FileSystemEntry,
   FilePreview,
@@ -27,6 +28,7 @@ declare global {
       getAllMetadata(): Promise<Record<string, ProjectMeta>>
       setLastLaunched(projectPath: string): Promise<void>
       setTagOverride(projectPath: string, override: ProjectTagOverride | null): Promise<ProjectMeta>
+      setProjectMarker(projectPath: string, marker: ProjectMarker): Promise<ProjectMeta>
       ptyCreate(id: string, cwd: string, command: string, args: string[]): Promise<PtyOpenResult>
       ptyWrite(id: string, data: string): void
       ptyResize(id: string, cols: number, rows: number): Promise<void>

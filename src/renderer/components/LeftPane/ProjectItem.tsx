@@ -1,9 +1,11 @@
 import { Project, useAppStore } from '../../store/appStore'
+import type { ProjectMarker } from '../../../preload'
 
 interface Props {
   project: Project
   isSelected: boolean
   isLaunched: boolean
+  onMarkerChange(project: Project, marker: ProjectMarker): void
   onContextMenuRequest(project: Project, x: number, y: number): void
 }
 
@@ -18,9 +20,56 @@ function formatDate(ts: number | null): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-export default function ProjectItem({ project, isSelected, isLaunched, onContextMenuRequest }: Props) {
+function nextMarker(marker: ProjectMarker): ProjectMarker {
+  if (marker === null) return 'favorite'
+  if (marker === 'favorite') return 'ignored'
+  return null
+}
+
+function MarkerIcon({ marker }: { marker: ProjectMarker }) {
+  if (marker === 'favorite') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M12 3.8 14.53 8.93l5.66.82-4.1 4 1 5.64L12 16.73l-5.09 2.66 1-5.64-4.1-4 5.66-.82Z"
+          fill="currentColor"
+        />
+      </svg>
+    )
+  }
+
+  if (marker === 'ignored') {
+    return (
+      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M9 3h6l1 2h4v2H4V5h4Zm1 7h2v8h-2Zm4 0h2v8h-2ZM7 10h2v8H7Zm-1 10h12l1-11H5Z"
+          fill="currentColor"
+        />
+      </svg>
+    )
+  }
+
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 3.8 14.53 8.93l5.66.82-4.1 4 1 5.64L12 16.73l-5.09 2.66 1-5.64-4.1-4 5.66-.82Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+export default function ProjectItem({ project, isSelected, isLaunched, onMarkerChange, onContextMenuRequest }: Props) {
   const { selectProject, claudeStatus } = useAppStore()
   const status = isLaunched ? (claudeStatus[project.path] ?? 'waiting') : null
+  const markerColor = project.marker === 'favorite'
+    ? '#f5c451'
+    : project.marker === 'ignored'
+      ? 'var(--red)'
+      : 'var(--text-muted)'
 
   return (
     <div
@@ -51,15 +100,44 @@ export default function ProjectItem({ project, isSelected, isLaunched, onContext
       {!status && <span style={{ width: 8 }} />}
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 13,
-          fontWeight: isLaunched ? 600 : 400,
-          color: isSelected ? 'var(--text-primary)' : 'var(--text-primary)',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-        }}>
-          {project.name}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{
+            flex: 1,
+            minWidth: 0,
+            fontSize: 13,
+            fontWeight: isLaunched ? 600 : 400,
+            color: isSelected ? 'var(--text-primary)' : 'var(--text-primary)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            opacity: project.marker === 'ignored' ? 0.72 : 1,
+          }}>
+            {project.name}
+          </div>
+          <button
+            type="button"
+            aria-label={`Cycle project marker for ${project.name}`}
+            title={project.marker === null ? 'Neutral' : project.marker === 'favorite' ? 'Favorite' : 'Ignored'}
+            onClick={(event) => {
+              event.stopPropagation()
+              onMarkerChange(project, nextMarker(project.marker))
+            }}
+            onMouseDown={(event) => event.stopPropagation()}
+            style={{
+              width: 22,
+              height: 22,
+              display: 'grid',
+              placeItems: 'center',
+              background: 'transparent',
+              border: 'none',
+              borderRadius: 4,
+              color: markerColor,
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            <MarkerIcon marker={project.marker} />
+          </button>
         </div>
         {(project.lastLaunched || project.primaryTag) && (
           <div style={{

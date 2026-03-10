@@ -32,6 +32,7 @@ export default function App() {
         ...p,
         lastLaunched: allMeta[p.path]?.lastLaunched ?? null,
         tagOverride: override,
+        marker: allMeta[p.path]?.marker ?? null,
         tags,
         primaryTag: override?.primaryTag ?? tags[0]?.name ?? null,
       }

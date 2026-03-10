@@ -17,9 +17,12 @@ export interface ProjectTagOverride {
   primaryTag: string | null
 }
 
+export type ProjectMarker = 'favorite' | 'ignored' | null
+
 export interface ProjectMeta {
   lastLaunched: number | null
   tagOverride: ProjectTagOverride | null
+  marker: ProjectMarker
 }
 
 export interface ScanSettings {
@@ -95,6 +98,9 @@ const api = {
 
   setTagOverride: (projectPath: string, override: ProjectTagOverride | null): Promise<ProjectMeta> =>
     ipcRenderer.invoke('metadata:setTagOverride', projectPath, override),
+
+  setProjectMarker: (projectPath: string, marker: ProjectMarker): Promise<ProjectMeta> =>
+    ipcRenderer.invoke('metadata:setProjectMarker', projectPath, marker),
 
   // Claude
   claudeHasSession: (projectPath: string): Promise<boolean> =>
