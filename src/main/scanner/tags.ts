@@ -77,6 +77,7 @@ const FRAMEWORK_RULES: FrameworkRule[] = [
   { tag: 'FastAPI', manifests: ['requirements.txt', 'pyproject.toml'] },
   { tag: 'Spring', manifests: ['pom.xml', 'build.gradle', 'build.gradle.kts'] },
   { tag: 'Ruby on Rails', files: ['config.ru'], manifests: ['Gemfile'] },
+  { tag: 'Unity', files: ['Assets', 'ProjectSettings/ProjectVersion.txt'], manifests: ['Packages/manifest.json'] },
   { tag: 'raylib', files: ['raylib.h'], manifests: ['dub.json', 'dub.sdl', 'CMakeLists.txt'] },
 ]
 
@@ -213,6 +214,11 @@ function applyFrameworkSignals(rootDir: string, fileNames: Set<string>, packageN
         value += 0.7
       } else if (rule.tag === 'Ruby on Rails' && hasTextInFile(path.join(rootDir, 'Gemfile'), /rails/i)) {
         value += 0.8
+      } else if (rule.tag === 'Unity' && (
+        hasTextInFile(path.join(rootDir, 'Packages/manifest.json'), /com\.unity\./i)
+        || fs.existsSync(path.join(rootDir, 'ProjectSettings', 'ProjectVersion.txt'))
+      )) {
+        value += 0.9
       } else if (rule.tag === 'raylib' && (
         hasTextInFile(path.join(rootDir, 'dub.json'), /raylib/i)
         || hasTextInFile(path.join(rootDir, 'dub.sdl'), /raylib/i)
