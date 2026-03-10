@@ -44,6 +44,11 @@ export interface FilePreview {
   message?: string
 }
 
+export interface PtyOpenResult {
+  replay: string
+  exitCode: number | null
+}
+
 const api = {
   defaultShell: process.env.SHELL || process.env.COMSPEC || '/bin/bash',
 
@@ -96,7 +101,7 @@ const api = {
     ipcRenderer.invoke('claude:hasSession', projectPath),
 
   // PTY
-  ptyCreate: (id: string, cwd: string, command: string, args: string[]): Promise<void> =>
+  ptyCreate: (id: string, cwd: string, command: string, args: string[]): Promise<PtyOpenResult> =>
     ipcRenderer.invoke('pty:create', id, cwd, command, args),
 
   ptyWrite: (id: string, data: string): void =>
@@ -104,6 +109,9 @@ const api = {
 
   ptyResize: (id: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke('pty:resize', id, cols, rows),
+
+  ptyDetach: (id: string): Promise<void> =>
+    ipcRenderer.invoke('pty:detach', id),
 
   ptyKill: (id: string): Promise<void> =>
     ipcRenderer.invoke('pty:kill', id),

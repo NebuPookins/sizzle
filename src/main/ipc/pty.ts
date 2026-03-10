@@ -1,13 +1,13 @@
 import { ipcMain, BrowserWindow } from 'electron'
-import { createPty, writePty, resizePty, killPty } from '../pty/manager'
+import { createPty, writePty, resizePty, detachPty, killPty } from '../pty/manager'
 
 export function registerPtyHandlers(getWin: () => BrowserWindow | null): void {
   ipcMain.handle(
     'pty:create',
     async (_event, id: string, cwd: string, command: string, args: string[]) => {
       const win = getWin()
-      if (!win) return
-      createPty(id, cwd, command, args, win)
+      if (!win) return { replay: '', exitCode: null }
+      return createPty(id, cwd, command, args, win)
     }
   )
 
@@ -17,6 +17,10 @@ export function registerPtyHandlers(getWin: () => BrowserWindow | null): void {
 
   ipcMain.handle('pty:resize', async (_event, id: string, cols: number, rows: number) => {
     resizePty(id, cols, rows)
+  })
+
+  ipcMain.handle('pty:detach', async (_event, id: string) => {
+    detachPty(id)
   })
 
   ipcMain.handle('pty:kill', async (_event, id: string) => {

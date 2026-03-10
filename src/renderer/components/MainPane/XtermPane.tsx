@@ -68,23 +68,8 @@ export default function XtermPane({
     term.loadAddon(fitAddon)
     term.open(containerRef.current)
 
-    // Must fit before spawn so we send correct initial dimensions
-    requestAnimationFrame(() => {
-      fitAddon.fit()
-      window.sizzle.ptyCreate(id, cwd, command, args).then(() => {
-        if (!initialCommand) return
-        // Write after spawn so the shell runs the requested command immediately.
-        window.sizzle.ptyWrite(id, `${initialCommand}\r`)
-      })
-    })
-
     termRef.current = term
     fitRef.current = fitAddon
-
-    // Send keyboard input to PTY
-    const disposeOnData = term.onData((data) => {
-      window.sizzle.ptyWrite(id, data)
-    })
 
     // Status tracking for Claude pane
     let statusTimer: ReturnType<typeof setTimeout> | null = null
@@ -108,8 +93,12 @@ export default function XtermPane({
 
     const unsubExit = window.sizzle.onPtyExit((ptyId) => {
       if (ptyId !== id) return
-      term.write('\r\n\x1b[90m[Process exited]\x1b[0m\r\n')
       onExitRef.current?.()
+    })
+
+    // Send keyboard input to PTY
+    const disposeOnData = term.onData((data) => {
+      window.sizzle.ptyWrite(id, data)
     })
 
     // Resize observer — debounced to avoid flooding IPC during window drag
@@ -127,6 +116,23 @@ export default function XtermPane({
     })
     if (containerRef.current) observer.observe(containerRef.current)
 
+    requestAnimationFrame(() => {
+      fitAddon.fit()
+      window.sizzle.ptyCreate(id, cwd, command, args).then(({ replay, exitCode }) => {
+        if (termRef.current !== term) return
+        if (replay) term.write(replay)
+        if (exitCode !== null) {
+          onExitRef.current?.()
+          return
+        }
+        const { cols, rows } = term
+        window.sizzle.ptyResize(id, cols, rows)
+        if (!initialCommand || replay) return
+        // Write after spawn so the shell runs the requested command immediately.
+        window.sizzle.ptyWrite(id, `${initialCommand}\r`)
+      })
+    })
+
     return () => {
       if (statusTimer) clearTimeout(statusTimer)
       if (resizeTimer) clearTimeout(resizeTimer)
@@ -134,7 +140,7 @@ export default function XtermPane({
       unsubExit()
       disposeOnData.dispose()
       observer.disconnect()
-      window.sizzle.ptyKill(id)
+      window.sizzle.ptyDetach(id)
       term.dispose()
       termRef.current = null
       fitRef.current = null

@@ -5,6 +5,7 @@ import type {
   ProjectTagOverride,
   FileSystemEntry,
   FilePreview,
+  PtyOpenResult,
   ScanSettings,
 } from '../preload/index'
 
@@ -26,9 +27,10 @@ declare global {
       getAllMetadata(): Promise<Record<string, ProjectMeta>>
       setLastLaunched(projectPath: string): Promise<void>
       setTagOverride(projectPath: string, override: ProjectTagOverride | null): Promise<ProjectMeta>
-      ptyCreate(id: string, cwd: string, command: string, args: string[]): Promise<void>
+      ptyCreate(id: string, cwd: string, command: string, args: string[]): Promise<PtyOpenResult>
       ptyWrite(id: string, data: string): void
       ptyResize(id: string, cols: number, rows: number): Promise<void>
+      ptyDetach(id: string): Promise<void>
       ptyKill(id: string): Promise<void>
       onPtyData(callback: (id: string, data: string) => void): () => void
       onPtyExit(callback: (id: string, exitCode: number) => void): () => void
