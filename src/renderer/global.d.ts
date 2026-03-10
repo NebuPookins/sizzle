@@ -5,6 +5,7 @@ import type {
   ProjectMarker,
   ProjectTagOverride,
   FileSystemEntry,
+  ArchiveTreeNode,
   FilePreview,
   ProjectRepositoryInfo,
   PtyOpenResult,

@@ -1,6 +1,7 @@
 import { dialog, ipcMain } from 'electron'
 import fs from 'fs'
 import path from 'path'
+import yauzl from 'yauzl'
 import { scanForProjects } from '../scanner'
 import { detectProjectTags } from '../scanner/tags'
 import { getScanSettings, setScanSettings } from '../store/metadata'
@@ -8,12 +9,19 @@ import { getScanSettings, setScanSettings } from '../store/metadata'
 const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 const MAX_MEDIA_PREVIEW_BYTES = 30 * 1024 * 1024
 
-type PreviewKind = 'text' | 'media' | 'unsupported' | 'tooLarge' | 'error'
+type PreviewKind = 'text' | 'media' | 'archive' | 'unsupported' | 'tooLarge' | 'error'
 
 export interface FileSystemEntry {
   name: string
   path: string
   isDirectory: boolean
+}
+
+export interface ArchiveTreeNode {
+  name: string
+  path: string
+  isDirectory: boolean
+  children?: ArchiveTreeNode[]
 }
 
 export interface FilePreview {
@@ -22,6 +30,7 @@ export interface FilePreview {
   mimeType?: string
   size?: number
   message?: string
+  archiveTree?: ArchiveTreeNode[]
 }
 
 export interface ProjectRepositoryInfo {
@@ -77,6 +86,102 @@ function isLikelyTextBuffer(buffer: Buffer): boolean {
     if (buffer[i] === 0) return false
   }
   return true
+}
+
+function normalizeArchiveEntryPath(entryPath: string): string {
+  return entryPath
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((segment) => segment && segment !== '.' && segment !== '..')
+    .join('/')
+}
+
+function sortArchiveTree(nodes: ArchiveTreeNode[]): void {
+  nodes.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+
+  for (const node of nodes) {
+    if (node.children) sortArchiveTree(node.children)
+  }
+}
+
+function readZipArchiveTree(filePath: string): Promise<ArchiveTreeNode[]> {
+  return new Promise((resolve, reject) => {
+    yauzl.open(filePath, { lazyEntries: true }, (openError, zipFile) => {
+      if (openError || !zipFile) {
+        reject(openError ?? new Error('Failed to open zip file.'))
+        return
+      }
+
+      const roots: ArchiveTreeNode[] = []
+      const nodeByPath = new Map<string, ArchiveTreeNode>()
+
+      function ensureNode(nodePath: string, isDirectory: boolean): ArchiveTreeNode {
+        const existing = nodeByPath.get(nodePath)
+        if (existing) {
+          if (isDirectory && !existing.isDirectory) {
+            existing.isDirectory = true
+            existing.children = existing.children ?? []
+          }
+          return existing
+        }
+
+        const name = nodePath.split('/').pop() ?? nodePath
+        const node: ArchiveTreeNode = {
+          name,
+          path: nodePath,
+          isDirectory,
+          children: isDirectory ? [] : undefined,
+        }
+        nodeByPath.set(nodePath, node)
+
+        const slashIndex = nodePath.lastIndexOf('/')
+        if (slashIndex === -1) {
+          roots.push(node)
+        } else {
+          const parentPath = nodePath.slice(0, slashIndex)
+          const parent = ensureNode(parentPath, true)
+          parent.children = parent.children ?? []
+          parent.children.push(node)
+        }
+
+        return node
+      }
+
+      zipFile.on('entry', (entry) => {
+        const normalizedPath = normalizeArchiveEntryPath(entry.fileName)
+        if (!normalizedPath) {
+          zipFile.readEntry()
+          return
+        }
+
+        const isDirectory = entry.fileName.endsWith('/')
+        const segments = normalizedPath.split('/')
+        let currentPath = ''
+        for (let index = 0; index < segments.length; index += 1) {
+          currentPath = currentPath ? `${currentPath}/${segments[index]}` : segments[index]
+          ensureNode(currentPath, isDirectory || index < segments.length - 1)
+        }
+
+        zipFile.readEntry()
+      })
+
+      zipFile.once('end', () => {
+        sortArchiveTree(roots)
+        zipFile.close()
+        resolve(roots)
+      })
+
+      zipFile.once('error', (error) => {
+        zipFile.close()
+        reject(error)
+      })
+
+      zipFile.readEntry()
+    })
+  })
 }
 
 function findGitDirectory(startPath: string): string | null {
@@ -312,6 +417,14 @@ export function registerScannerHandlers(): void {
       if (!stat.isFile()) return { kind: 'unsupported', message: 'Not a file.' }
 
       const ext = path.extname(normalizedFilePath).toLowerCase()
+      if (ext === '.zip') {
+        return {
+          kind: 'archive',
+          size: stat.size,
+          archiveTree: await readZipArchiveTree(normalizedFilePath),
+        }
+      }
+
       const knownMime = MEDIA_MIME_BY_EXTENSION[ext]
       if (knownMime) {
         if (stat.size > MAX_MEDIA_PREVIEW_BYTES) {

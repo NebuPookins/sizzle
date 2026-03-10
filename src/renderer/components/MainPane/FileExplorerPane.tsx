@@ -7,7 +7,14 @@ interface FileSystemEntry {
   isDirectory: boolean
 }
 
-type FilePreviewKind = 'text' | 'media' | 'unsupported' | 'tooLarge' | 'error'
+interface ArchiveTreeNode {
+  name: string
+  path: string
+  isDirectory: boolean
+  children?: ArchiveTreeNode[]
+}
+
+type FilePreviewKind = 'text' | 'media' | 'archive' | 'unsupported' | 'tooLarge' | 'error'
 
 interface FilePreview {
   kind: FilePreviewKind
@@ -15,6 +22,7 @@ interface FilePreview {
   mimeType?: string
   size?: number
   message?: string
+  archiveTree?: ArchiveTreeNode[]
 }
 
 interface Props {
@@ -36,6 +44,36 @@ function pathTail(filePath: string): string {
 function buildDataUrl(preview: FilePreview): string | null {
   if (preview.kind !== 'media' || !preview.content || !preview.mimeType) return null
   return `data:${preview.mimeType};base64,${preview.content}`
+}
+
+function renderArchiveNodes(nodes: ArchiveTreeNode[], depth = 0): ReactElement[] {
+  const rows: ReactElement[] = []
+
+  for (const node of nodes) {
+    rows.push(
+      <div
+        key={node.path}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: `4px 8px 4px ${depth * 18}px`,
+          color: node.isDirectory ? 'var(--text-primary)' : 'var(--text-secondary)',
+          fontSize: 12,
+          fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+        }}
+      >
+        <span style={{ width: 14, color: 'var(--text-muted)' }}>{node.isDirectory ? 'v' : '-'}</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+      </div>,
+    )
+
+    if (node.isDirectory && node.children && node.children.length > 0) {
+      rows.push(...renderArchiveNodes(node.children, depth + 1))
+    }
+  }
+
+  return rows
 }
 
 export default function FileExplorerPane({ projectPath }: Props) {
@@ -233,6 +271,27 @@ export default function FileExplorerPane({ projectPath }: Props) {
               }}>
                 {preview.content ?? ''}
               </pre>
+            )}
+
+            {!loadingPreview && preview?.kind === 'archive' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                  ZIP archive
+                  {preview.size ? ` | ${humanBytes(preview.size)}` : ''}
+                </div>
+                <div style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  padding: '8px',
+                  background: 'var(--bg-panel)',
+                }}>
+                  {preview.archiveTree && preview.archiveTree.length > 0 ? (
+                    renderArchiveNodes(preview.archiveTree)
+                  ) : (
+                    <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Archive is empty.</div>
+                  )}
+                </div>
+              </div>
             )}
 
             {!loadingPreview && preview?.kind === 'media' && previewUrl && (

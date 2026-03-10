@@ -38,7 +38,14 @@ export interface FileSystemEntry {
   isDirectory: boolean
 }
 
-export type FilePreviewKind = 'text' | 'media' | 'unsupported' | 'tooLarge' | 'error'
+export interface ArchiveTreeNode {
+  name: string
+  path: string
+  isDirectory: boolean
+  children?: ArchiveTreeNode[]
+}
+
+export type FilePreviewKind = 'text' | 'media' | 'archive' | 'unsupported' | 'tooLarge' | 'error'
 
 export interface FilePreview {
   kind: FilePreviewKind
@@ -46,6 +53,7 @@ export interface FilePreview {
   mimeType?: string
   size?: number
   message?: string
+  archiveTree?: ArchiveTreeNode[]
 }
 
 export interface ProjectRepositoryInfo {
