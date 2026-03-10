@@ -4,6 +4,7 @@ import path from 'path'
 import { scanForProjects } from '../scanner'
 import { detectProjectTags } from '../scanner/tags'
 import { getScanSettings, setScanSettings } from '../store/metadata'
+
 const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 const MAX_MEDIA_PREVIEW_BYTES = 30 * 1024 * 1024
 
@@ -21,6 +22,11 @@ export interface FilePreview {
   mimeType?: string
   size?: number
   message?: string
+}
+
+export interface ProjectRepositoryInfo {
+  isGitRepo: boolean
+  githubUrl: string | null
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -71,6 +77,115 @@ function isLikelyTextBuffer(buffer: Buffer): boolean {
     if (buffer[i] === 0) return false
   }
   return true
+}
+
+function findGitDirectory(startPath: string): string | null {
+  let currentPath = normalizePath(startPath)
+
+  while (true) {
+    const dotGitPath = path.join(currentPath, '.git')
+    if (fs.existsSync(dotGitPath)) {
+      const stat = fs.statSync(dotGitPath)
+      if (stat.isDirectory()) return dotGitPath
+      if (stat.isFile()) {
+        try {
+          const raw = fs.readFileSync(dotGitPath, 'utf-8')
+          const match = raw.match(/gitdir:\s*(.+)/i)
+          if (!match) return null
+          const gitDir = match[1].trim()
+          return path.resolve(currentPath, gitDir)
+        } catch {
+          return null
+        }
+      }
+    }
+
+    const parentPath = path.dirname(currentPath)
+    if (parentPath === currentPath) return null
+    currentPath = parentPath
+  }
+}
+
+function parseGitConfig(configContent: string): Record<string, Record<string, string>> {
+  const sections: Record<string, Record<string, string>> = {}
+  let currentSection: string | null = null
+
+  for (const rawLine of configContent.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#') || line.startsWith(';')) continue
+
+    const sectionMatch = line.match(/^\[(.+)]$/)
+    if (sectionMatch) {
+      currentSection = sectionMatch[1].trim()
+      if (!sections[currentSection]) sections[currentSection] = {}
+      continue
+    }
+
+    if (!currentSection) continue
+    const separatorIndex = line.indexOf('=')
+    if (separatorIndex === -1) continue
+
+    const key = line.slice(0, separatorIndex).trim()
+    const value = line.slice(separatorIndex + 1).trim()
+    sections[currentSection][key] = value
+  }
+
+  return sections
+}
+
+function normalizeGitHubRemote(remoteUrl: string): string | null {
+  const trimmed = remoteUrl.trim()
+  if (!trimmed) return null
+
+  const sshMatch = trimmed.match(/^git@github\.com:(.+?)(?:\.git)?$/i)
+  if (sshMatch) return `https://github.com/${sshMatch[1]}`
+
+  const httpsMatch = trimmed.match(/^https?:\/\/github\.com\/(.+?)(?:\.git)?(?:\/)?$/i)
+  if (httpsMatch) return `https://github.com/${httpsMatch[1]}`
+
+  const sshProtocolMatch = trimmed.match(/^ssh:\/\/git@github\.com\/(.+?)(?:\.git)?(?:\/)?$/i)
+  if (sshProtocolMatch) return `https://github.com/${sshProtocolMatch[1]}`
+
+  return null
+}
+
+function getProjectRepositoryInfo(projectPath: string): ProjectRepositoryInfo {
+  try {
+    const gitDirectory = findGitDirectory(projectPath)
+    if (!gitDirectory) return { isGitRepo: false, githubUrl: null }
+
+    const configPath = path.join(gitDirectory, 'config')
+    const headPath = path.join(gitDirectory, 'HEAD')
+    if (!fs.existsSync(configPath)) return { isGitRepo: true, githubUrl: null }
+
+    const config = parseGitConfig(fs.readFileSync(configPath, 'utf-8'))
+    const headContent = fs.existsSync(headPath) ? fs.readFileSync(headPath, 'utf-8').trim() : ''
+    const headMatch = headContent.match(/^ref:\s+refs\/heads\/(.+)$/)
+    const currentBranch = headMatch?.[1] ?? null
+    const branchRemoteName = currentBranch ? config[`branch "${currentBranch}"`]?.remote : null
+
+    const remoteCandidates = [
+      branchRemoteName,
+      'origin',
+      ...Object.keys(config)
+        .map((key) => key.match(/^remote "(.+)"$/)?.[1] ?? null)
+        .filter((value): value is string => value !== null),
+    ]
+
+    const seen = new Set<string>()
+    for (const remoteName of remoteCandidates) {
+      if (!remoteName || seen.has(remoteName)) continue
+      seen.add(remoteName)
+      const remoteUrl = config[`remote "${remoteName}"`]?.url
+      if (!remoteUrl) continue
+      const githubUrl = normalizeGitHubRemote(remoteUrl)
+      if (githubUrl) return { isGitRepo: true, githubUrl }
+    }
+
+    return { isGitRepo: true, githubUrl: null }
+  } catch {
+    return { isGitRepo: false, githubUrl: null }
+  }
 }
 
 export function registerScannerHandlers(): void {
@@ -154,6 +269,10 @@ export function registerScannerHandlers(): void {
     } catch {
       return null
     }
+  })
+
+  ipcMain.handle('project:getRepositoryInfo', async (_event, projectPath: string) => {
+    return getProjectRepositoryInfo(projectPath)
   })
 
   ipcMain.handle('files:listDirectory', async (_event, projectPath: string, directoryPath?: string) => {

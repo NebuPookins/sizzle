@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell, WebContents } from 'electron'
 import path from 'path'
 import { registerScannerHandlers } from './ipc/scanner'
 import { registerPtyHandlers } from './ipc/pty'
@@ -9,6 +9,13 @@ import { getQuitMode, signalReloadReady } from './appReload'
 import { ptyHostClient } from './pty/client'
 
 let mainWindow: BrowserWindow | null = null
+
+function configureExternalLinks(contents: WebContents): void {
+  contents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url)
+    return { action: 'deny' }
+  })
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -22,14 +29,11 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      webviewTag: true,
     },
   })
 
-  // Open external links in browser
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
-    return { action: 'deny' }
-  })
+  configureExternalLinks(mainWindow.webContents)
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -48,6 +52,10 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  app.on('web-contents-created', (_event, contents) => {
+    configureExternalLinks(contents)
+  })
+
   registerScannerHandlers()
   registerPtyHandlers(() => mainWindow)
   registerMetadataHandlers()

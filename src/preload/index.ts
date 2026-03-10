@@ -48,6 +48,11 @@ export interface FilePreview {
   message?: string
 }
 
+export interface ProjectRepositoryInfo {
+  isGitRepo: boolean
+  githubUrl: string | null
+}
+
 export interface PtyOpenResult {
   replay: string
   exitCode: number | null
@@ -80,6 +85,9 @@ const api = {
 
   readMarkdownFile: (filePath: string): Promise<string | null> =>
     ipcRenderer.invoke('markdown:readFile', filePath),
+
+  getProjectRepositoryInfo: (projectPath: string): Promise<ProjectRepositoryInfo> =>
+    ipcRenderer.invoke('project:getRepositoryInfo', projectPath),
 
   listDirectory: (projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]> =>
     ipcRenderer.invoke('files:listDirectory', projectPath, directoryPath),

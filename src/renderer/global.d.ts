@@ -6,12 +6,23 @@ import type {
   ProjectTagOverride,
   FileSystemEntry,
   FilePreview,
+  ProjectRepositoryInfo,
   PtyOpenResult,
   ScanSettings,
 } from '../preload/index'
 import type { ReloadSnapshot } from '../shared/reload'
 
 declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
+        allowpopups?: string
+        partition?: string
+        src?: string
+      }
+    }
+  }
+
   interface Window {
     sizzle: {
       defaultShell: string
@@ -23,6 +34,7 @@ declare global {
       pickDirectory(): Promise<string | null>
       getMarkdownFiles(projectPath: string): Promise<string[]>
       readMarkdownFile(filePath: string): Promise<string | null>
+      getProjectRepositoryInfo(projectPath: string): Promise<ProjectRepositoryInfo>
       listDirectory(projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]>
       previewFile(projectPath: string, filePath: string): Promise<FilePreview>
       getMetadata(projectPath: string): Promise<ProjectMeta>

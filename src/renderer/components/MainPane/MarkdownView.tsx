@@ -10,10 +10,13 @@ interface Props {
   project: Project
 }
 
+const GITHUB_TAB_ID = 'github'
+
 export default function MarkdownView({ project }: Props) {
   const [files, setFiles] = useState<string[]>([])
-  const [activeFile, setActiveFile] = useState<'explorer' | string | null>(null)
+  const [activeFile, setActiveFile] = useState<'explorer' | typeof GITHUB_TAB_ID | string | null>(null)
   const [content, setContent] = useState<string | null>(null)
+  const [githubUrl, setGithubUrl] = useState<string | null>(null)
   const [isEditingTags, setIsEditingTags] = useState(false)
   const [tagInput, setTagInput] = useState('')
   const [primaryTagInput, setPrimaryTagInput] = useState('')
@@ -23,16 +26,22 @@ export default function MarkdownView({ project }: Props) {
     setFiles([])
     setActiveFile(null)
     setContent(null)
+    setGithubUrl(null)
 
-    window.sizzle.getMarkdownFiles(project.path).then((f) => {
-      setFiles(f)
-      if (f.length > 0) setActiveFile(f[0])
+    Promise.all([
+      window.sizzle.getMarkdownFiles(project.path),
+      window.sizzle.getProjectRepositoryInfo(project.path),
+    ]).then(([markdownFiles, repositoryInfo]) => {
+      setFiles(markdownFiles)
+      setGithubUrl(repositoryInfo.githubUrl)
+      if (markdownFiles.length > 0) setActiveFile(markdownFiles[0])
+      else if (repositoryInfo.githubUrl) setActiveFile(GITHUB_TAB_ID)
       else setActiveFile('explorer')
     })
   }, [project.path])
 
   useEffect(() => {
-    if (!activeFile || activeFile === 'explorer') return
+    if (!activeFile || activeFile === 'explorer' || activeFile === GITHUB_TAB_ID) return
     setContent(null)
     window.sizzle.readMarkdownFile(activeFile).then((c) => {
       setContent(c ?? '*Could not read file.*')
@@ -346,6 +355,24 @@ export default function MarkdownView({ project }: Props) {
             {tabName(f)}
           </button>
         ))}
+        {githubUrl && (
+          <button
+            onClick={() => setActiveFile(GITHUB_TAB_ID)}
+            style={{
+              background: 'none',
+              border: 'none',
+              borderBottom: activeFile === GITHUB_TAB_ID ? '2px solid var(--accent)' : '2px solid transparent',
+              color: activeFile === GITHUB_TAB_ID ? 'var(--text-primary)' : 'var(--text-secondary)',
+              padding: '8px 14px',
+              fontSize: 12,
+              cursor: 'pointer',
+              fontWeight: activeFile === GITHUB_TAB_ID ? 600 : 400,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            GitHub
+          </button>
+        )}
         <button
           onClick={() => setActiveFile('explorer')}
           style={{
@@ -365,21 +392,37 @@ export default function MarkdownView({ project }: Props) {
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: activeFile === 'explorer' ? 'hidden' : 'auto', padding: activeFile === 'explorer' ? 0 : '20px 24px' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: activeFile === 'explorer' || activeFile === GITHUB_TAB_ID ? 'hidden' : 'auto', padding: activeFile === 'explorer' ? 0 : activeFile === GITHUB_TAB_ID ? '16px' : '20px 24px' }}>
         {activeFile === 'explorer' && (
           <FileExplorerPane projectPath={project.path} />
         )}
-        {activeFile !== 'explorer' && content === null && activeFile && (
+        {activeFile === GITHUB_TAB_ID && githubUrl && (
+          <div style={{ display: 'flex', flex: 1, minHeight: 0, flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-secondary)', fontSize: 12 }}>
+              <span>GitHub repository</span>
+              <a href={githubUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                Open in browser
+              </a>
+            </div>
+            <webview
+              src={githubUrl}
+              allowpopups="true"
+              title={`${project.name} GitHub`}
+              style={{ flex: 1, minHeight: 0, width: '100%', border: '1px solid var(--border)', borderRadius: 8, background: '#fff' }}
+            />
+          </div>
+        )}
+        {activeFile !== 'explorer' && activeFile !== GITHUB_TAB_ID && content === null && activeFile && (
           <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
         )}
-        {activeFile !== 'explorer' && content !== null && (
+        {activeFile !== 'explorer' && activeFile !== GITHUB_TAB_ID && content !== null && (
           <div className="markdown-body">
             <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
               {content}
             </ReactMarkdown>
           </div>
         )}
-        {files.length === 0 && content === null && activeFile !== 'explorer' && (
+        {files.length === 0 && !githubUrl && content === null && activeFile !== 'explorer' && (
           <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
             No markdown files found in this project.
           </div>

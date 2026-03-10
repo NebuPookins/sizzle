@@ -13,6 +13,8 @@ interface Props {
   launchTarget: LaunchTarget
 }
 
+const GITHUB_TAB_ID = 'github'
+
 export default function TerminalView({ projectPath, launchTarget }: Props) {
   const {
     setClaudeStatus,
@@ -26,6 +28,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const [shellExited, setShellExited] = useState(false)
   const [markdownFiles, setMarkdownFiles] = useState<string[]>([])
   const [activeMarkdown, setActiveMarkdown] = useState<string | null>(null)
+  const [githubUrl, setGithubUrl] = useState<string | null>(null)
   const terminalState = terminalStates[projectPath]
   const agentSession = terminalState?.agentSession ?? 0
   const shellSession = terminalState?.shellSession ?? 0
@@ -61,10 +64,15 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   useEffect(() => {
     let isMounted = true
     setActiveMarkdown(null)
+    setGithubUrl(null)
 
-    window.sizzle.getMarkdownFiles(projectPath).then((files) => {
+    Promise.all([
+      window.sizzle.getMarkdownFiles(projectPath),
+      window.sizzle.getProjectRepositoryInfo(projectPath),
+    ]).then(([files, repositoryInfo]) => {
       if (!isMounted) return
       setMarkdownFiles(files)
+      setGithubUrl(repositoryInfo.githubUrl)
     })
 
     return () => {
@@ -73,7 +81,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   }, [projectPath])
 
   useEffect(() => {
-    if (activeTopTab === 'terminal' || activeTopTab === 'explorer') return
+    if (activeTopTab === 'terminal' || activeTopTab === 'explorer' || activeTopTab === GITHUB_TAB_ID) return
 
     let isMounted = true
     const selectedFile = activeTopTab
@@ -154,6 +162,24 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                 {tabName(file)}
               </button>
             ))}
+            {githubUrl && (
+              <button
+                onClick={() => setActiveTopTab(projectPath, GITHUB_TAB_ID)}
+                style={{
+                  border: 'none',
+                  borderBottom: activeTopTab === GITHUB_TAB_ID ? '2px solid var(--accent)' : '2px solid transparent',
+                  background: 'transparent',
+                  color: activeTopTab === GITHUB_TAB_ID ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  fontSize: 11,
+                  fontWeight: activeTopTab === GITHUB_TAB_ID ? 600 : 500,
+                  padding: '6px 10px 4px',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                GitHub
+              </button>
+            )}
             <button
               onClick={() => setActiveTopTab(projectPath, 'explorer')}
               style={{
@@ -243,17 +269,33 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             minHeight: 0,
             display: activeTopTab === 'terminal' ? 'none' : 'flex',
             flexDirection: 'column',
-            overflowY: activeTopTab === 'explorer' ? 'hidden' : 'auto',
-            padding: activeTopTab === 'explorer' ? 0 : '18px 20px',
+            overflowY: activeTopTab === 'explorer' || activeTopTab === GITHUB_TAB_ID ? 'hidden' : 'auto',
+            padding: activeTopTab === 'explorer' ? 0 : activeTopTab === GITHUB_TAB_ID ? '14px' : '18px 20px',
             background: '#0f0f1a',
           }}>
             {activeTopTab === 'explorer' && (
               <FileExplorerPane projectPath={projectPath} />
             )}
-            {activeTopTab !== 'explorer' && activeMarkdown === null && (
+            {activeTopTab === GITHUB_TAB_ID && githubUrl && (
+              <div style={{ display: 'flex', flex: 1, minHeight: 0, flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-secondary)', fontSize: 12 }}>
+                  <span>GitHub repository</span>
+                  <a href={githubUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                    Open in browser
+                  </a>
+                </div>
+                <webview
+                  src={githubUrl}
+                  allowpopups="true"
+                  title="GitHub repository"
+                  style={{ flex: 1, minHeight: 0, width: '100%', border: '1px solid var(--border)', borderRadius: 8, background: '#fff' }}
+                />
+              </div>
+            )}
+            {activeTopTab !== 'explorer' && activeTopTab !== GITHUB_TAB_ID && activeMarkdown === null && (
               <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
             )}
-            {activeTopTab !== 'explorer' && activeMarkdown !== null && (
+            {activeTopTab !== 'explorer' && activeTopTab !== GITHUB_TAB_ID && activeMarkdown !== null && (
               <div className="markdown-body">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                   {activeMarkdown}
