@@ -40,11 +40,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   claudeStatus: {},
 
   setProjects(projects) {
-    const selectedPath = get().selectedProject?.path
-    const selectedProject = selectedPath
-      ? projects.find((project) => project.path === selectedPath) ?? null
-      : null
-    set({ projects, selectedProject })
+    set((state) => {
+      const projectPaths = new Set(projects.map((project) => project.path))
+      const selectedPath = state.selectedProject?.path
+      const selectedProject = selectedPath
+        ? projects.find((project) => project.path === selectedPath) ?? null
+        : null
+      const launchedProjects = new Set(
+        Array.from(state.launchedProjects).filter((projectPath) => projectPaths.has(projectPath)),
+      )
+      const launchTargets = Object.fromEntries(
+        Object.entries(state.launchTargets).filter(([projectPath]) => projectPaths.has(projectPath)),
+      )
+      const claudeStatus = Object.fromEntries(
+        Object.entries(state.claudeStatus).filter(([projectPath]) => projectPaths.has(projectPath)),
+      )
+      return { projects, selectedProject, launchedProjects, launchTargets, claudeStatus }
+    })
   },
 
   selectProject(project) {

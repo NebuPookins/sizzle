@@ -87,6 +87,16 @@ function writeDB(db: DB): void {
   cache = db
 }
 
+function pruneMissingProjects(db: DB): boolean {
+  let changed = false
+  for (const projectPath of Object.keys(db.projects)) {
+    if (fs.existsSync(projectPath)) continue
+    delete db.projects[projectPath]
+    changed = true
+  }
+  return changed
+}
+
 export function getMetadata(projectPath: string): ProjectMeta {
   const db = readDB()
   return db.projects[projectPath] ?? { lastLaunched: null, tagOverride: null }
@@ -103,10 +113,16 @@ export function setLastLaunched(projectPath: string): void {
 
 export function getAllMetadata(): Record<string, ProjectMeta> {
   const db = readDB()
+  const prunedMissingProjects = pruneMissingProjects(db)
+  let normalized = prunedMissingProjects
   for (const projectPath of Object.keys(db.projects)) {
     if (!db.projects[projectPath].tagOverride) {
       db.projects[projectPath].tagOverride = null
+      normalized = true
     }
+  }
+  if (normalized) {
+    writeDB(db)
   }
   return db.projects
 }
