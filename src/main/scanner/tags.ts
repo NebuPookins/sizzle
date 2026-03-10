@@ -49,6 +49,8 @@ const EXTENSION_LANGUAGES: Record<string, string> = {
   '.r': 'R',
   '.jl': 'Julia',
   '.d': 'D',
+  '.asm': 'Z80 Assembly',
+  '.z80': 'Z80 Assembly',
 }
 
 interface FrameworkRule {

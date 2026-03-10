@@ -25,7 +25,7 @@ const SOURCE_EXTENSIONS = new Set([
   '.rs', '.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.kt', '.go',
   '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.cs', '.rb', '.swift',
   '.scala', '.clj', '.ex', '.exs', '.hs', '.ml', '.elm', '.dart',
-  '.lua', '.php', '.r', '.jl',
+  '.lua', '.php', '.r', '.jl', '.asm', '.z80',
 ])
 
 export function isProjectRoot(dir: string): boolean {
