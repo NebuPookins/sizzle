@@ -9,6 +9,7 @@ import type {
   PtyOpenResult,
   ScanSettings,
 } from '../preload/index'
+import type { ReloadSnapshot } from '../shared/reload'
 
 declare global {
   interface Window {
@@ -29,6 +30,8 @@ declare global {
       setLastLaunched(projectPath: string): Promise<void>
       setTagOverride(projectPath: string, override: ProjectTagOverride | null): Promise<ProjectMeta>
       setProjectMarker(projectPath: string, marker: ProjectMarker): Promise<ProjectMeta>
+      consumeReloadSnapshot(): Promise<ReloadSnapshot | null>
+      reloadCore(snapshot: ReloadSnapshot): Promise<void>
       ptyCreate(id: string, cwd: string, command: string, args: string[]): Promise<PtyOpenResult>
       ptyWrite(id: string, data: string): void
       ptyResize(id: string, cols: number, rows: number): Promise<void>

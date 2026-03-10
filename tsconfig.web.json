@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "outDir": "out"
   },
-  "include": ["src/renderer/**/*"]
+  "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/**/*"]
 }

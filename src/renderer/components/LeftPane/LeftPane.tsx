@@ -15,7 +15,14 @@ interface ContextMenuState {
 }
 
 export default function LeftPane({ onRefreshProjects }: Props) {
-  const { selectedProject, launchedProjects, sortedProjects, setProjectMarker } = useAppStore()
+  const {
+    selectedProject,
+    launchedProjects,
+    sortedProjects,
+    setProjectMarker,
+    createReloadSnapshot,
+    setReloadMessage,
+  } = useAppStore()
   const [search, setSearch] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -62,6 +69,17 @@ export default function LeftPane({ onRefreshProjects }: Props) {
     } catch (error) {
       console.error('Failed to persist project marker', error)
       setProjectMarker(project.path, previousMarker)
+    }
+  }
+
+  const handleReloadCore = async () => {
+    const confirmed = window.confirm('Restart the app core and reconnect open terminals?')
+    if (!confirmed) return
+    try {
+      await window.sizzle.reloadCore(createReloadSnapshot())
+    } catch (error) {
+      console.error('Failed to reload core', error)
+      setReloadMessage('Core reload failed. The current app is still running.')
     }
   }
 
@@ -130,7 +148,22 @@ export default function LeftPane({ onRefreshProjects }: Props) {
         )}
       </div>
 
-      <div style={{ padding: '8px', borderTop: '1px solid var(--border)' }}>
+      <div style={{ padding: '8px', borderTop: '1px solid var(--border)', display: 'grid', gap: 8 }}>
+        <button
+          onClick={handleReloadCore}
+          style={{
+            width: '100%',
+            background: 'var(--bg-hover)',
+            border: '1px solid var(--border)',
+            color: 'var(--text-primary)',
+            borderRadius: 6,
+            fontSize: 12,
+            padding: '7px 10px',
+            cursor: 'pointer',
+          }}
+        >
+          Reload Core
+        </button>
         <button
           onClick={() => setShowSettings(true)}
           style={{

@@ -11,7 +11,7 @@ function sortTags(tags: ProjectTag[]): ProjectTag[] {
 }
 
 export default function App() {
-  const { setProjects } = useAppStore()
+  const { setProjects, hydrateReloadSnapshot, reloadMessage, setReloadMessage } = useAppStore()
   const isLoadingProjectsRef = useRef(false)
 
   const loadProjects = useCallback(async () => {
@@ -41,8 +41,13 @@ export default function App() {
   }, [setProjects])
 
   useEffect(() => {
-    loadProjects()
-  }, [loadProjects])
+    window.sizzle.consumeReloadSnapshot().then((snapshot) => {
+      if (snapshot) {
+        hydrateReloadSnapshot(snapshot)
+      }
+      void loadProjects()
+    })
+  }, [hydrateReloadSnapshot, loadProjects])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -68,8 +73,32 @@ export default function App() {
     }
   }, [loadProjects])
 
+  useEffect(() => {
+    if (!reloadMessage) return
+    const timer = window.setTimeout(() => setReloadMessage(null), 4000)
+    return () => window.clearTimeout(timer)
+  }, [reloadMessage, setReloadMessage])
+
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+      {reloadMessage && (
+        <div style={{
+          position: 'fixed',
+          top: 12,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 3000,
+          background: 'var(--bg-panel)',
+          border: '1px solid var(--border)',
+          borderRadius: 8,
+          padding: '10px 14px',
+          fontSize: 12,
+          color: 'var(--text-primary)',
+          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+        }}>
+          {reloadMessage}
+        </div>
+      )}
       <LeftPane onRefreshProjects={loadProjects} />
       <MainPane />
     </div>

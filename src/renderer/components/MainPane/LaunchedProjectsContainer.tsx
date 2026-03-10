@@ -6,7 +6,7 @@ interface Props {
 }
 
 export default function LaunchedProjectsContainer({ activeProjectPath }: Props) {
-  const { launchedProjects, launchTargets } = useAppStore()
+  const { launchedProjects, terminalStates } = useAppStore()
   const paths = Array.from(launchedProjects)
 
   return (
@@ -23,7 +23,7 @@ export default function LaunchedProjectsContainer({ activeProjectPath }: Props) 
         >
           <TerminalView
             projectPath={projectPath}
-            launchTarget={launchTargets[projectPath] ?? 'claude'}
+            launchTarget={terminalStates[projectPath]?.launchTarget ?? 'claude'}
           />
         </div>
       ))}

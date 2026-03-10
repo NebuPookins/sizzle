@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { ProjectMarker, ProjectTag, ProjectTagOverride } from '../../preload'
+import type { LaunchTarget, ReloadSnapshot } from '../../shared/reload'
 
 export interface Project {
   name: string
@@ -13,15 +14,23 @@ export interface Project {
   marker: ProjectMarker
 }
 
-export type LaunchTarget = 'claude' | 'codex' | 'shell'
+export interface ProjectTerminalState {
+  launchTarget: LaunchTarget
+  agentSession: number
+  shellSession: number
+  activeTopTab: 'terminal' | 'explorer' | string
+}
+
 type ClaudeStatus = 'working' | 'waiting'
 
 interface AppState {
   projects: Project[]
+  selectedProjectPath: string | null
   selectedProject: Project | null
   launchedProjects: Set<string>
-  launchTargets: Record<string, LaunchTarget>
+  terminalStates: Record<string, ProjectTerminalState>
   claudeStatus: Record<string, ClaudeStatus>
+  reloadMessage: string | null
 
   setProjects(projects: Project[]): void
   selectProject(project: Project): void
@@ -31,63 +40,92 @@ interface AppState {
   setProjectTagOverride(projectPath: string, override: ProjectTagOverride | null): void
   setProjectMarker(projectPath: string, marker: ProjectMarker): void
   setProjectDetectedTags(projectPath: string, detectedTags: ProjectTag[]): void
+  setActiveTopTab(projectPath: string, tab: 'terminal' | 'explorer' | string): void
+  relaunchTerminal(projectPath: string, which: 'agent' | 'shell'): void
+  getTerminalState(projectPath: string): ProjectTerminalState | null
+  hydrateReloadSnapshot(snapshot: ReloadSnapshot): void
+  createReloadSnapshot(): ReloadSnapshot
+  setReloadMessage(message: string | null): void
   sortedProjects(): Project[]
+}
+
+function resolveSelectedProject(projects: Project[], selectedProjectPath: string | null): Project | null {
+  return selectedProjectPath
+    ? projects.find((project) => project.path === selectedProjectPath) ?? null
+    : null
+}
+
+function defaultTerminalState(launchTarget: LaunchTarget): ProjectTerminalState {
+  return {
+    launchTarget,
+    agentSession: 0,
+    shellSession: 0,
+    activeTopTab: 'terminal',
+  }
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
+  selectedProjectPath: null,
   selectedProject: null,
   launchedProjects: new Set(),
-  launchTargets: {},
+  terminalStates: {},
   claudeStatus: {},
+  reloadMessage: null,
 
   setProjects(projects) {
     set((state) => {
       const projectPaths = new Set(projects.map((project) => project.path))
-      const selectedPath = state.selectedProject?.path
-      const selectedProject = selectedPath
-        ? projects.find((project) => project.path === selectedPath) ?? null
-        : null
       const launchedProjects = new Set(
         Array.from(state.launchedProjects).filter((projectPath) => projectPaths.has(projectPath)),
       )
-      const launchTargets = Object.fromEntries(
-        Object.entries(state.launchTargets).filter(([projectPath]) => projectPaths.has(projectPath)),
+      const terminalStates = Object.fromEntries(
+        Object.entries(state.terminalStates).filter(([projectPath]) => projectPaths.has(projectPath)),
       )
       const claudeStatus = Object.fromEntries(
         Object.entries(state.claudeStatus).filter(([projectPath]) => projectPaths.has(projectPath)),
       )
-      return { projects, selectedProject, launchedProjects, launchTargets, claudeStatus }
+      const selectedProject = resolveSelectedProject(projects, state.selectedProjectPath)
+      return { projects, selectedProject, launchedProjects, terminalStates, claudeStatus }
     })
   },
 
   selectProject(project) {
-    set({ selectedProject: project })
+    set({ selectedProjectPath: project.path, selectedProject: project })
   },
 
   launchProject(project, target) {
-    const { launchedProjects, projects, launchTargets } = get()
     const now = Date.now()
-    const updated = projects.map((p) =>
-      p.path === project.path ? { ...p, lastLaunched: now } : p
-    )
-    const newLaunched = new Set(launchedProjects)
-    newLaunched.add(project.path)
-    set({
-      projects: updated,
-      selectedProject: { ...project, lastLaunched: now },
-      launchedProjects: newLaunched,
-      launchTargets: { ...launchTargets, [project.path]: target },
+    set((state) => {
+      const projects = state.projects.map((p) =>
+        p.path === project.path ? { ...p, lastLaunched: now } : p,
+      )
+      const launchedProjects = new Set(state.launchedProjects)
+      launchedProjects.add(project.path)
+      const terminalStates = {
+        ...state.terminalStates,
+        [project.path]: {
+          ...(state.terminalStates[project.path] ?? defaultTerminalState(target)),
+          launchTarget: target,
+        },
+      }
+      return {
+        projects,
+        selectedProjectPath: project.path,
+        selectedProject: projects.find((p) => p.path === project.path) ?? { ...project, lastLaunched: now },
+        launchedProjects,
+        terminalStates,
+      }
     })
   },
 
   unlaunchProject(path) {
     set((state) => {
-      const newLaunched = new Set(state.launchedProjects)
-      newLaunched.delete(path)
-      const { [path]: _cs, ...claudeStatus } = state.claudeStatus
-      const { [path]: _lt, ...launchTargets } = state.launchTargets
-      return { launchedProjects: newLaunched, claudeStatus, launchTargets }
+      const launchedProjects = new Set(state.launchedProjects)
+      launchedProjects.delete(path)
+      const { [path]: _terminalState, ...terminalStates } = state.terminalStates
+      const { [path]: _claudeStatus, ...claudeStatus } = state.claudeStatus
+      return { launchedProjects, terminalStates, claudeStatus }
     })
   },
 
@@ -101,23 +139,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const projects = state.projects.map((project) => {
         if (project.path !== projectPath) return project
-        const tags = (override?.tags ?? project.detectedTags).slice().sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
-        const primaryTag = override?.primaryTag
-          ?? tags[0]?.name
-          ?? null
-        return {
-          ...project,
-          tagOverride: override,
-          tags,
-          primaryTag,
-        }
+        const tags = (override?.tags ?? project.detectedTags)
+          .slice()
+          .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+        const primaryTag = override?.primaryTag ?? tags[0]?.name ?? null
+        return { ...project, tagOverride: override, tags, primaryTag }
       })
-
-      const selectedProject = state.selectedProject?.path === projectPath
-        ? projects.find((project) => project.path === projectPath) ?? null
-        : state.selectedProject
-
-      return { projects, selectedProject }
+      return {
+        projects,
+        selectedProject: resolveSelectedProject(projects, state.selectedProjectPath),
+      }
     })
   },
 
@@ -126,12 +157,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const projects = state.projects.map((project) =>
         project.path === projectPath ? { ...project, marker } : project,
       )
-
-      const selectedProject = state.selectedProject?.path === projectPath
-        ? projects.find((project) => project.path === projectPath) ?? null
-        : state.selectedProject
-
-      return { projects, selectedProject }
+      return {
+        projects,
+        selectedProject: resolveSelectedProject(projects, state.selectedProjectPath),
+      }
     })
   },
 
@@ -139,17 +168,103 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const projects = state.projects.map((project) => {
         if (project.path !== projectPath) return project
-        const tags = (project.tagOverride?.tags ?? detectedTags).slice().sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+        const tags = (project.tagOverride?.tags ?? detectedTags)
+          .slice()
+          .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
         const primaryTag = project.tagOverride?.primaryTag ?? tags[0]?.name ?? null
         return { ...project, detectedTags, tags, primaryTag }
       })
-
-      const selectedProject = state.selectedProject?.path === projectPath
-        ? projects.find((p) => p.path === projectPath) ?? null
-        : state.selectedProject
-
-      return { projects, selectedProject }
+      return {
+        projects,
+        selectedProject: resolveSelectedProject(projects, state.selectedProjectPath),
+      }
     })
+  },
+
+  setActiveTopTab(projectPath, tab) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      return {
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: {
+            ...current,
+            activeTopTab: tab,
+          },
+        },
+      }
+    })
+  },
+
+  relaunchTerminal(projectPath, which) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      return {
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: {
+            ...current,
+            agentSession: which === 'agent' ? current.agentSession + 1 : current.agentSession,
+            shellSession: which === 'shell' ? current.shellSession + 1 : current.shellSession,
+          },
+        },
+      }
+    })
+  },
+
+  getTerminalState(projectPath) {
+    return get().terminalStates[projectPath] ?? null
+  },
+
+  hydrateReloadSnapshot(snapshot) {
+    set((state) => {
+      const launchedProjects = new Set(snapshot.terminals.map((terminal) => terminal.projectPath))
+      const terminalStates = Object.fromEntries(
+        snapshot.terminals.map((terminal) => [
+          terminal.projectPath,
+          {
+            launchTarget: terminal.launchTarget,
+            agentSession: terminal.agentSession,
+            shellSession: terminal.shellSession,
+            activeTopTab: terminal.activeTopTab,
+          },
+        ]),
+      )
+      return {
+        selectedProjectPath: snapshot.selectedProjectPath,
+        selectedProject: resolveSelectedProject(state.projects, snapshot.selectedProjectPath),
+        launchedProjects,
+        terminalStates,
+        reloadMessage: 'Core reloaded. Terminals reconnected.',
+      }
+    })
+  },
+
+  createReloadSnapshot() {
+    const state = get()
+    return {
+      selectedProjectPath: state.selectedProjectPath,
+      terminals: Array.from(state.launchedProjects)
+        .map((projectPath) => {
+          const terminalState = state.terminalStates[projectPath]
+          if (!terminalState) return null
+          return {
+            projectPath,
+            launchTarget: terminalState.launchTarget,
+            agentSession: terminalState.agentSession,
+            shellSession: terminalState.shellSession,
+            activeTopTab: terminalState.activeTopTab,
+          }
+        })
+        .filter((value): value is ReloadSnapshot['terminals'][number] => value !== null),
+      timestamp: Date.now(),
+    }
+  },
+
+  setReloadMessage(message) {
+    set({ reloadMessage: message })
   },
 
   sortedProjects() {
@@ -159,3 +274,5 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 }))
+
+export type { LaunchTarget, ReloadSnapshot }

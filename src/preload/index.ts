@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ReloadSnapshot } from '../shared/reload'
 
 export interface ProjectTag {
   name: string
@@ -101,6 +102,12 @@ const api = {
 
   setProjectMarker: (projectPath: string, marker: ProjectMarker): Promise<ProjectMeta> =>
     ipcRenderer.invoke('metadata:setProjectMarker', projectPath, marker),
+
+  consumeReloadSnapshot: (): Promise<ReloadSnapshot | null> =>
+    ipcRenderer.invoke('appReload:consumeSnapshot'),
+
+  reloadCore: (snapshot: ReloadSnapshot): Promise<void> =>
+    ipcRenderer.invoke('appReload:reloadCore', snapshot),
 
   // Claude
   claudeHasSession: (projectPath: string): Promise<boolean> =>

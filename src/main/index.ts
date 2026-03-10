@@ -1,10 +1,12 @@
 import { app, BrowserWindow, shell } from 'electron'
 import path from 'path'
-import { killAll } from './pty/manager'
 import { registerScannerHandlers } from './ipc/scanner'
 import { registerPtyHandlers } from './ipc/pty'
 import { registerMetadataHandlers } from './ipc/metadata'
 import { registerClaudeHandlers } from './ipc/claude'
+import { registerAppReloadHandlers } from './ipc/appReload'
+import { getQuitMode, signalReloadReady } from './appReload'
+import { ptyHostClient } from './pty/client'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -36,6 +38,10 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
 
+  mainWindow.webContents.once('did-finish-load', () => {
+    signalReloadReady()
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -46,6 +52,7 @@ app.whenReady().then(() => {
   registerPtyHandlers(() => mainWindow)
   registerMetadataHandlers()
   registerClaudeHandlers()
+  registerAppReloadHandlers(() => mainWindow)
   createWindow()
 
   app.on('activate', () => {
@@ -54,7 +61,11 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
-  killAll()
+  if (getQuitMode() === 'reload') {
+    ptyHostClient.disconnect()
+    return
+  }
+  void ptyHostClient.shutdown()
 })
 
 app.on('window-all-closed', () => {

@@ -1,0 +1,15 @@
+export type LaunchTarget = 'claude' | 'codex' | 'shell'
+
+export interface ProjectTerminalStateSnapshot {
+  projectPath: string
+  launchTarget: LaunchTarget
+  agentSession: number
+  shellSession: number
+  activeTopTab: 'terminal' | 'explorer' | string
+}
+
+export interface ReloadSnapshot {
+  selectedProjectPath: string | null
+  terminals: ProjectTerminalStateSnapshot[]
+  timestamp: number
+}

@@ -14,15 +14,22 @@ interface Props {
 }
 
 export default function TerminalView({ projectPath, launchTarget }: Props) {
-  const { setClaudeStatus, unlaunchProject } = useAppStore()
+  const {
+    setClaudeStatus,
+    unlaunchProject,
+    terminalStates,
+    setActiveTopTab,
+    relaunchTerminal,
+  } = useAppStore()
   const isShellOnly = launchTarget === 'shell'
   const [agentExited, setAgentExited] = useState(false)
-  const [agentSession, setAgentSession] = useState(0)
   const [shellExited, setShellExited] = useState(false)
-  const [shellSession, setShellSession] = useState(0)
   const [markdownFiles, setMarkdownFiles] = useState<string[]>([])
-  const [activeTopTab, setActiveTopTab] = useState<'terminal' | 'explorer' | string>('terminal')
   const [activeMarkdown, setActiveMarkdown] = useState<string | null>(null)
+  const terminalState = terminalStates[projectPath]
+  const agentSession = terminalState?.agentSession ?? 0
+  const shellSession = terminalState?.shellSession ?? 0
+  const activeTopTab = terminalState?.activeTopTab ?? 'terminal'
   const shell = window.sizzle.defaultShell || '/bin/bash'
   const agent = isShellOnly ? null : getAgent(launchTarget)
   const [agentArgs, setAgentArgs] = useState<string[] | null>(null)
@@ -53,7 +60,6 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
 
   useEffect(() => {
     let isMounted = true
-    setActiveTopTab('terminal')
     setActiveMarkdown(null)
 
     window.sizzle.getMarkdownFiles(projectPath).then((files) => {
@@ -112,7 +118,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           </div>
           <div style={{ display: 'flex', alignItems: 'stretch', minWidth: 0, overflowX: 'auto' }}>
             <button
-              onClick={() => setActiveTopTab('terminal')}
+              onClick={() => setActiveTopTab(projectPath, 'terminal')}
               style={{
                 border: 'none',
                 borderBottom: activeTopTab === 'terminal' ? '2px solid var(--accent)' : '2px solid transparent',
@@ -132,7 +138,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             {markdownFiles.map((file) => (
               <button
                 key={file}
-                onClick={() => setActiveTopTab(file)}
+                onClick={() => setActiveTopTab(projectPath, file)}
                 style={{
                   border: 'none',
                   borderBottom: activeTopTab === file ? '2px solid var(--accent)' : '2px solid transparent',
@@ -149,7 +155,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
               </button>
             ))}
             <button
-              onClick={() => setActiveTopTab('explorer')}
+              onClick={() => setActiveTopTab(projectPath, 'explorer')}
               style={{
                 border: 'none',
                 borderBottom: activeTopTab === 'explorer' ? '2px solid var(--accent)' : '2px solid transparent',
@@ -167,11 +173,11 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           </div>
           <div style={{ flex: 1 }} />
           <button
-            onClick={() => {
-              window.sizzle.ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
-              window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
-              unlaunchProject(projectPath)
-            }}
+              onClick={() => {
+                window.sizzle.ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
+                window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+                unlaunchProject(projectPath)
+              }}
             style={{
               marginRight: 8,
               padding: '3px 9px',
@@ -191,7 +197,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             <button
               onClick={() => {
                 setAgentExited(false)
-                setAgentSession((value) => value + 1)
+                relaunchTerminal(projectPath, 'agent')
               }}
               style={{
                 marginRight: 10,
@@ -299,11 +305,11 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           </button>
         )}
         {shellExited && (
-          <button
-            onClick={() => {
-              setShellExited(false)
-              setShellSession((value) => value + 1)
-            }}
+            <button
+              onClick={() => {
+                setShellExited(false)
+                relaunchTerminal(projectPath, 'shell')
+              }}
             style={{
               marginRight: 10,
               padding: '4px 10px',
