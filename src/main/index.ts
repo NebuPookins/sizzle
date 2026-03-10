@@ -17,6 +17,16 @@ function configureExternalLinks(contents: WebContents): void {
   })
 }
 
+async function loadMainWindow(window: BrowserWindow): Promise<void> {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    await window.loadURL(process.env.ELECTRON_RENDERER_URL)
+    window.webContents.openDevTools()
+    return
+  }
+
+  await window.loadFile(path.join(__dirname, '../renderer/index.html'))
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -34,17 +44,17 @@ function createWindow(): void {
   })
 
   configureExternalLinks(mainWindow.webContents)
-
-  if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-    mainWindow.webContents.openDevTools()
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
-  }
-
-  mainWindow.webContents.once('did-finish-load', () => {
-    signalReloadReady()
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('Renderer failed to load', { errorCode, errorDescription, validatedURL })
   })
+
+  void loadMainWindow(mainWindow)
+    .then(() => {
+      signalReloadReady()
+    })
+    .catch((error) => {
+      console.error('Failed to load main window', error)
+    })
 
   mainWindow.on('closed', () => {
     mainWindow = null

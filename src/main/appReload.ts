@@ -11,6 +11,10 @@ type QuitMode = 'normal' | 'reload'
 let quitMode: QuitMode = 'normal'
 let pendingReloadSnapshot: ReloadSnapshot | null = null
 
+function isElectronViteDev(): boolean {
+  return process.env.NODE_ENV_ELECTRON_VITE === 'development'
+}
+
 function getArgValue(name: string): string | null {
   const prefix = `${name}=`
   const arg = process.argv.find((value) => value.startsWith(prefix))
@@ -45,6 +49,12 @@ export function consumeReloadSnapshot(): ReloadSnapshot | null {
 }
 
 export async function reloadCore(snapshot: ReloadSnapshot, mainWindow: BrowserWindow): Promise<void> {
+  if (isElectronViteDev()) {
+    pendingReloadSnapshot = snapshot
+    mainWindow.webContents.reloadIgnoringCache()
+    return
+  }
+
   ensureReloadDir()
   const token = crypto.randomBytes(16).toString('hex')
   const ackPath = path.join(RELOAD_STATE_DIR, `${token}.ack`)
