@@ -6,6 +6,10 @@ The core idea is not just opening one repo and staying there. It is managing ten
 
 Sizzle scans one or more folders for project roots, shows them in a browsable list, renders README files inside the app, and launches an AI coding agent plus a shell in split terminals for the selected project. The current built-in agent presets are Claude Code and Codex.
 
+## Status
+
+Sizzle is open source and usable now, but it is still early-stage and developer-oriented. The primary documented workflow today is running from source.
+
 ## Why use it
 
 - You are juggling many repos, prototypes, tools, and half-finished ideas at once.
@@ -41,10 +45,18 @@ Notes:
 ## Install
 
 ```bash
+git clone https://github.com/NebuPookins/sizzle.git
+cd sizzle
 npm install
 ```
 
 The `postinstall` script rebuilds the native PTY dependency automatically.
+
+If the Electron binary is missing after install, run:
+
+```bash
+node node_modules/electron/install.js
+```
 
 ## Run In Development
 
@@ -67,6 +79,13 @@ This produces the Electron app bundles under `out/`.
 ```bash
 npm run preview
 ```
+
+## Support
+
+- Issues: <https://github.com/NebuPookins/sizzle/issues>
+- Repository: <https://github.com/NebuPookins/sizzle>
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security: [SECURITY.md](SECURITY.md)
 
 ## Config Storage
 

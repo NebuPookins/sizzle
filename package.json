@@ -1,7 +1,29 @@
 {
   "name": "sizzle",
   "version": "0.1.0",
-  "description": "Steam-like project launcher for myPrograms/",
+  "private": true,
+  "description": "IDE-style Electron app for browsing local projects and launching AI coding agents in project-rooted terminals.",
+  "author": "Nebu Pookins <nebupookins@gmail.com>",
+  "keywords": [
+    "electron",
+    "react",
+    "typescript",
+    "desktop",
+    "developer-tools",
+    "project-launcher",
+    "terminal",
+    "ai-agents",
+    "claude-code",
+    "codex"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NebuPookins/sizzle.git"
+  },
+  "homepage": "https://github.com/NebuPookins/sizzle#readme",
+  "bugs": {
+    "url": "https://github.com/NebuPookins/sizzle/issues"
+  },
   "license": "AGPL-3.0-or-later",
   "main": "out/main/index.js",
   "scripts": {
