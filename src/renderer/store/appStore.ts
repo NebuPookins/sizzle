@@ -67,6 +67,12 @@ function defaultTerminalState(launchTarget: LaunchTarget): ProjectTerminalState 
   }
 }
 
+function markerRank(marker: ProjectMarker): number {
+  if (marker === 'favorite') return 0
+  if (marker === null) return 1
+  return 2
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   selectedProjectPath: null,
@@ -295,8 +301,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   sortedProjects() {
     return [...get().projects].sort((a, b) => {
-      if (!a.lastLaunched && !b.lastLaunched) return a.name.localeCompare(b.name)
-      return (b.lastLaunched ?? 0) - (a.lastLaunched ?? 0)
+      const markerDiff = markerRank(a.marker) - markerRank(b.marker)
+      if (markerDiff !== 0) return markerDiff
+
+      const launchDiff = (b.lastLaunched ?? 0) - (a.lastLaunched ?? 0)
+      if (launchDiff !== 0) return launchDiff
+
+      return a.name.localeCompare(b.name)
     })
   },
 }))
