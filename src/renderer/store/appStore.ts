@@ -17,7 +17,9 @@ export interface Project {
 export interface ProjectTerminalState {
   launchTarget: LaunchTarget
   agentSession: number
-  shellSession: number
+  shellTabs: number[]
+  activeShellTab: number
+  nextShellSession: number
   activeTopTab: 'terminal' | 'explorer' | string
 }
 
@@ -44,7 +46,11 @@ interface AppState {
   setProjectMarker(projectPath: string, marker: ProjectMarker): void
   setProjectDetectedTags(projectPath: string, detectedTags: ProjectTag[]): void
   setActiveTopTab(projectPath: string, tab: 'terminal' | 'explorer' | string): void
-  relaunchTerminal(projectPath: string, which: 'agent' | 'shell'): void
+  setActiveShellTab(projectPath: string, shellSession: number): void
+  createShellTab(projectPath: string): void
+  closeShellTab(projectPath: string, shellSession: number): void
+  relaunchAgentTerminal(projectPath: string): void
+  relaunchShellTab(projectPath: string, shellSession: number): void
   getTerminalState(projectPath: string): ProjectTerminalState | null
   hydrateReloadSnapshot(snapshot: ReloadSnapshot): void
   createReloadSnapshot(): ReloadSnapshot
@@ -62,8 +68,33 @@ function defaultTerminalState(launchTarget: LaunchTarget): ProjectTerminalState 
   return {
     launchTarget,
     agentSession: 0,
-    shellSession: 0,
+    shellTabs: [0],
+    activeShellTab: 0,
+    nextShellSession: 1,
     activeTopTab: 'terminal',
+  }
+}
+
+function normalizeTerminalState(
+  state: Partial<ProjectTerminalState> & { shellSession?: number } | undefined,
+  launchTarget: LaunchTarget,
+): ProjectTerminalState {
+  const fallbackShellSession = state?.shellSession ?? 0
+  const shellTabs = state?.shellTabs && state.shellTabs.length > 0
+    ? [...state.shellTabs]
+    : [fallbackShellSession]
+  const activeShellTab = state?.activeShellTab !== undefined && shellTabs.includes(state.activeShellTab)
+    ? state.activeShellTab
+    : shellTabs[0]
+  const maxShellSession = shellTabs.reduce((max, value) => Math.max(max, value), fallbackShellSession)
+
+  return {
+    launchTarget: state?.launchTarget ?? launchTarget,
+    agentSession: state?.agentSession ?? 0,
+    shellTabs,
+    activeShellTab,
+    nextShellSession: Math.max(state?.nextShellSession ?? 0, maxShellSession + 1),
+    activeTopTab: state?.activeTopTab ?? 'terminal',
   }
 }
 
@@ -121,11 +152,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const shellStatus = { ...state.shellStatus, [project.path]: state.shellStatus[project.path] ?? 'waiting' }
       const terminalStates = {
         ...state.terminalStates,
-        [project.path]: {
-          ...(state.terminalStates[project.path] ?? defaultTerminalState(target)),
-          launchTarget: target,
-        },
+        [project.path]: normalizeTerminalState(state.terminalStates[project.path], target),
       }
+      terminalStates[project.path].launchTarget = target
       return {
         projects,
         selectedProjectPath: project.path,
@@ -211,11 +240,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const current = state.terminalStates[projectPath]
       if (!current) return {}
+      const normalized = normalizeTerminalState(current, current.launchTarget)
       return {
         terminalStates: {
           ...state.terminalStates,
           [projectPath]: {
-            ...current,
+            ...normalized,
             activeTopTab: tab,
           },
         },
@@ -223,23 +253,105 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  relaunchTerminal(projectPath, which) {
+  setActiveShellTab(projectPath, shellSession) {
     set((state) => {
       const current = state.terminalStates[projectPath]
       if (!current) return {}
+      const normalized = normalizeTerminalState(current, current.launchTarget)
+      if (!normalized.shellTabs.includes(shellSession)) return {}
       return {
-        claudeStatus: which === 'agent'
-          ? { ...state.claudeStatus, [projectPath]: 'waiting' }
-          : state.claudeStatus,
-        shellStatus: which === 'shell'
-          ? { ...state.shellStatus, [projectPath]: 'waiting' }
-          : state.shellStatus,
         terminalStates: {
           ...state.terminalStates,
           [projectPath]: {
-            ...current,
-            agentSession: which === 'agent' ? current.agentSession + 1 : current.agentSession,
-            shellSession: which === 'shell' ? current.shellSession + 1 : current.shellSession,
+            ...normalized,
+            activeShellTab: shellSession,
+          },
+        },
+      }
+    })
+  },
+
+  createShellTab(projectPath) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      const normalized = normalizeTerminalState(current, current.launchTarget)
+      const nextShellSession = normalized.nextShellSession
+      return {
+        shellStatus: { ...state.shellStatus, [projectPath]: 'waiting' },
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: {
+            ...normalized,
+            shellTabs: [...normalized.shellTabs, nextShellSession],
+            activeShellTab: nextShellSession,
+            nextShellSession: nextShellSession + 1,
+          },
+        },
+      }
+    })
+  },
+
+  closeShellTab(projectPath, shellSession) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      const normalized = normalizeTerminalState(current, current.launchTarget)
+      if (!normalized.shellTabs.includes(shellSession) || normalized.shellTabs.length <= 1) return {}
+      const shellTabs = normalized.shellTabs.filter((value) => value !== shellSession)
+      const activeShellTab = normalized.activeShellTab === shellSession
+        ? shellTabs[Math.max(0, normalized.shellTabs.indexOf(shellSession) - 1)] ?? shellTabs[0]
+        : normalized.activeShellTab
+      return {
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: {
+            ...normalized,
+            shellTabs,
+            activeShellTab,
+          },
+        },
+      }
+    })
+  },
+
+  relaunchAgentTerminal(projectPath) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      const normalized = normalizeTerminalState(current, current.launchTarget)
+      return {
+        claudeStatus: { ...state.claudeStatus, [projectPath]: 'waiting' },
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: {
+            ...normalized,
+            agentSession: normalized.agentSession + 1,
+          },
+        },
+      }
+    })
+  },
+
+  relaunchShellTab(projectPath, shellSession) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      const normalized = normalizeTerminalState(current, current.launchTarget)
+      const shellIndex = normalized.shellTabs.indexOf(shellSession)
+      if (shellIndex === -1) return {}
+      const nextShellSession = normalized.nextShellSession
+      const shellTabs = [...normalized.shellTabs]
+      shellTabs[shellIndex] = nextShellSession
+      return {
+        shellStatus: { ...state.shellStatus, [projectPath]: 'waiting' },
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: {
+            ...normalized,
+            shellTabs,
+            activeShellTab: normalized.activeShellTab === shellSession ? nextShellSession : normalized.activeShellTab,
+            nextShellSession: nextShellSession + 1,
           },
         },
       }
@@ -256,12 +368,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const terminalStates = Object.fromEntries(
         snapshot.terminals.map((terminal) => [
           terminal.projectPath,
-          {
-            launchTarget: terminal.launchTarget,
-            agentSession: terminal.agentSession,
-            shellSession: terminal.shellSession,
-            activeTopTab: terminal.activeTopTab,
-          },
+          normalizeTerminalState(terminal, terminal.launchTarget),
         ]),
       )
       return {
@@ -286,7 +393,10 @@ export const useAppStore = create<AppState>((set, get) => ({
             projectPath,
             launchTarget: terminalState.launchTarget,
             agentSession: terminalState.agentSession,
-            shellSession: terminalState.shellSession,
+            shellSession: terminalState.activeShellTab,
+            shellTabs: terminalState.shellTabs,
+            activeShellTab: terminalState.activeShellTab,
+            nextShellSession: terminalState.nextShellSession,
             activeTopTab: terminalState.activeTopTab,
           }
         })

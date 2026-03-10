@@ -22,32 +22,55 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     unlaunchProject,
     terminalStates,
     setActiveTopTab,
-    relaunchTerminal,
+    setActiveShellTab,
+    createShellTab,
+    closeShellTab,
+    relaunchAgentTerminal,
+    relaunchShellTab,
   } = useAppStore()
   const isShellOnly = launchTarget === 'shell'
   const [agentExited, setAgentExited] = useState(false)
-  const [shellExited, setShellExited] = useState(false)
+  const [exitedShells, setExitedShells] = useState<number[]>([])
+  const [shellActivity, setShellActivity] = useState<Record<number, 'working' | 'waiting'>>({})
   const [markdownFiles, setMarkdownFiles] = useState<string[]>([])
   const [activeMarkdown, setActiveMarkdown] = useState<string | null>(null)
   const [githubUrl, setGithubUrl] = useState<string | null>(null)
   const terminalState = terminalStates[projectPath]
   const agentSession = terminalState?.agentSession ?? 0
-  const shellSession = terminalState?.shellSession ?? 0
+  const shellTabs = terminalState?.shellTabs ?? [0]
+  const activeShellTab = terminalState?.activeShellTab ?? shellTabs[0]
   const activeTopTab = terminalState?.activeTopTab ?? 'terminal'
   const shell = window.sizzle.defaultShell || '/bin/bash'
   const agent = isShellOnly ? null : getAgent(launchTarget)
   const [agentArgs, setAgentArgs] = useState<string[] | null>(null)
   const tabName = (filePath: string) => filePath.split('/').pop() ?? filePath
+  const allShellsExited = shellTabs.length > 0 && shellTabs.every((shellSession) => exitedShells.includes(shellSession))
+  const activeShellExited = exitedShells.includes(activeShellTab)
 
   useEffect(() => {
     if (isShellOnly) {
-      if (!shellExited) return
+      if (!allShellsExited) return
     } else {
-      if (!agentExited || !shellExited) return
+      if (!agentExited || !allShellsExited) return
     }
     const timer = setTimeout(() => unlaunchProject(projectPath), 2000)
     return () => clearTimeout(timer)
-  }, [agentExited, shellExited, isShellOnly])
+  }, [agentExited, allShellsExited, isShellOnly, projectPath, unlaunchProject])
+
+  useEffect(() => {
+    setExitedShells((current) => current.filter((shellSession) => shellTabs.includes(shellSession)))
+    setShellActivity((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([shellSession]) => shellTabs.includes(Number(shellSession))),
+      ) as Record<number, 'working' | 'waiting'>
+      return next
+    })
+  }, [shellTabs])
+
+  useEffect(() => {
+    const overallStatus = Object.values(shellActivity).some((status) => status === 'working') ? 'working' : 'waiting'
+    setShellStatus(projectPath, overallStatus)
+  }, [projectPath, setShellStatus, shellActivity])
 
   useEffect(() => {
     if (!agent) return
@@ -202,7 +225,9 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           <button
               onClick={() => {
                 window.sizzle.ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
-                window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+                for (const shellSession of shellTabs) {
+                  window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+                }
                 unlaunchProject(projectPath)
               }}
             style={{
@@ -224,7 +249,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             <button
               onClick={() => {
                 setAgentExited(false)
-                relaunchTerminal(projectPath, 'agent')
+                relaunchAgentTerminal(projectPath)
               }}
               style={{
                 marginRight: 10,
@@ -310,12 +335,13 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       {/* Divider label / shell header */}
       <div style={{
         display: 'flex',
-        flexShrink: 0,
-        background: 'var(--bg-panel)',
-        alignItems: 'center',
-      }}>
+          flexShrink: 0,
+          background: 'var(--bg-panel)',
+          alignItems: 'center',
+          gap: 8,
+        }}>
         <div style={{
-          flex: 1,
+          flexShrink: 0,
           padding: '5px 12px',
           fontSize: 11,
           color: 'var(--text-muted)',
@@ -325,10 +351,82 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
         }}>
           Shell
         </div>
+        <div style={{ display: 'flex', alignItems: 'stretch', minWidth: 0, overflowX: 'auto' }}>
+          {shellTabs.map((shellSession, index) => {
+            const isActive = shellSession === activeShellTab
+            const isExited = exitedShells.includes(shellSession)
+            return (
+              <div
+                key={shellSession}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+                }}
+              >
+                <button
+                  onClick={() => setActiveShellTab(projectPath, shellSession)}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    fontSize: 11,
+                    fontWeight: isActive ? 600 : 500,
+                    padding: '6px 8px 4px 10px',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {`Shell ${index + 1}${isExited ? ' • exited' : ''}`}
+                </button>
+                {shellTabs.length > 1 && (
+                  <button
+                    onClick={() => {
+                      window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+                      closeShellTab(projectPath, shellSession)
+                    }}
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--text-muted)',
+                      fontSize: 12,
+                      padding: '6px 8px 4px 0',
+                      cursor: 'pointer',
+                    }}
+                    aria-label={`Close shell ${index + 1}`}
+                    title={`Close shell ${index + 1}`}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            )
+          })}
+          <button
+            onClick={() => createShellTab(projectPath)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--text-secondary)',
+              fontSize: 14,
+              fontWeight: 700,
+              padding: '4px 10px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+            aria-label="Open another shell tab"
+            title="Open another shell tab"
+          >
+            +
+          </button>
+        </div>
+        <div style={{ flex: 1 }} />
         {isShellOnly && (
           <button
             onClick={() => {
-              window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+              for (const shellSession of shellTabs) {
+                window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+              }
               unlaunchProject(projectPath)
             }}
             style={{
@@ -347,11 +445,16 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             ■ Stop
           </button>
         )}
-        {shellExited && (
+        {activeShellExited && (
             <button
               onClick={() => {
-                setShellExited(false)
-                relaunchTerminal(projectPath, 'shell')
+                setExitedShells((current) => current.filter((shellSession) => shellSession !== activeShellTab))
+                setShellActivity((current) => {
+                  const next = { ...current }
+                  delete next[activeShellTab]
+                  return next
+                })
+                relaunchShellTab(projectPath, activeShellTab)
               }}
             style={{
               marginRight: 10,
@@ -372,15 +475,32 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
 
       {/* Shell terminal */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <XtermPane
-          key={`shell-${shellSession}`}
-          id={`shell-${projectPath}-${shellSession}`}
-          cwd={projectPath}
-          command={shell}
-          args={[]}
-          onStatusChange={(status) => setShellStatus(projectPath, status)}
-          onExit={() => setShellExited(true)}
-        />
+        {shellTabs.map((shellSession) => (
+          <div
+            key={`shell-pane-${shellSession}`}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: shellSession === activeShellTab ? 'flex' : 'none',
+              flexDirection: 'column',
+            }}
+          >
+            <XtermPane
+              key={`shell-${shellSession}`}
+              id={`shell-${projectPath}-${shellSession}`}
+              cwd={projectPath}
+              command={shell}
+              args={[]}
+              onStatusChange={(status) => {
+                setShellActivity((current) => ({ ...current, [shellSession]: status }))
+              }}
+              onExit={() => {
+                setExitedShells((current) => (current.includes(shellSession) ? current : [...current, shellSession]))
+                setShellActivity((current) => ({ ...current, [shellSession]: 'waiting' }))
+              }}
+            />
+          </div>
+        ))}
       </div>
     </div>
   )
