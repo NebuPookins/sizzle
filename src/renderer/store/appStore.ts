@@ -22,6 +22,7 @@ export interface ProjectTerminalState {
 }
 
 type ClaudeStatus = 'working' | 'waiting'
+type ShellStatus = 'working' | 'waiting'
 
 interface AppState {
   projects: Project[]
@@ -30,6 +31,7 @@ interface AppState {
   launchedProjects: Set<string>
   terminalStates: Record<string, ProjectTerminalState>
   claudeStatus: Record<string, ClaudeStatus>
+  shellStatus: Record<string, ShellStatus>
   reloadMessage: string | null
 
   setProjects(projects: Project[]): void
@@ -37,6 +39,7 @@ interface AppState {
   launchProject(project: Project, target: LaunchTarget): void
   unlaunchProject(path: string): void
   setClaudeStatus(projectPath: string, status: ClaudeStatus): void
+  setShellStatus(projectPath: string, status: ShellStatus): void
   setProjectTagOverride(projectPath: string, override: ProjectTagOverride | null): void
   setProjectMarker(projectPath: string, marker: ProjectMarker): void
   setProjectDetectedTags(projectPath: string, detectedTags: ProjectTag[]): void
@@ -71,6 +74,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   launchedProjects: new Set(),
   terminalStates: {},
   claudeStatus: {},
+  shellStatus: {},
   reloadMessage: null,
 
   setProjects(projects) {
@@ -85,8 +89,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const claudeStatus = Object.fromEntries(
         Object.entries(state.claudeStatus).filter(([projectPath]) => projectPaths.has(projectPath)),
       )
+      const shellStatus = Object.fromEntries(
+        Object.entries(state.shellStatus).filter(([projectPath]) => projectPaths.has(projectPath)),
+      )
       const selectedProject = resolveSelectedProject(projects, state.selectedProjectPath)
-      return { projects, selectedProject, launchedProjects, terminalStates, claudeStatus }
+      return { projects, selectedProject, launchedProjects, terminalStates, claudeStatus, shellStatus }
     })
   },
 
@@ -102,6 +109,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
       const launchedProjects = new Set(state.launchedProjects)
       launchedProjects.add(project.path)
+      const claudeStatus = target === 'shell'
+        ? state.claudeStatus
+        : { ...state.claudeStatus, [project.path]: state.claudeStatus[project.path] ?? 'waiting' }
+      const shellStatus = { ...state.shellStatus, [project.path]: state.shellStatus[project.path] ?? 'waiting' }
       const terminalStates = {
         ...state.terminalStates,
         [project.path]: {
@@ -115,6 +126,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedProject: projects.find((p) => p.path === project.path) ?? { ...project, lastLaunched: now },
         launchedProjects,
         terminalStates,
+        claudeStatus,
+        shellStatus,
       }
     })
   },
@@ -125,13 +138,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       launchedProjects.delete(path)
       const { [path]: _terminalState, ...terminalStates } = state.terminalStates
       const { [path]: _claudeStatus, ...claudeStatus } = state.claudeStatus
-      return { launchedProjects, terminalStates, claudeStatus }
+      const { [path]: _shellStatus, ...shellStatus } = state.shellStatus
+      return { launchedProjects, terminalStates, claudeStatus, shellStatus }
     })
   },
 
   setClaudeStatus(projectPath, status) {
     set((state) => ({
       claudeStatus: { ...state.claudeStatus, [projectPath]: status },
+    }))
+  },
+
+  setShellStatus(projectPath, status) {
+    set((state) => ({
+      shellStatus: { ...state.shellStatus, [projectPath]: status },
     }))
   },
 
@@ -202,6 +222,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const current = state.terminalStates[projectPath]
       if (!current) return {}
       return {
+        claudeStatus: which === 'agent'
+          ? { ...state.claudeStatus, [projectPath]: 'waiting' }
+          : state.claudeStatus,
+        shellStatus: which === 'shell'
+          ? { ...state.shellStatus, [projectPath]: 'waiting' }
+          : state.shellStatus,
         terminalStates: {
           ...state.terminalStates,
           [projectPath]: {

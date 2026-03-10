@@ -52,6 +52,16 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+.status-dot-stack {
+  width: 8px;
+  min-width: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
 .status-dot.waiting {
   background: var(--green);
 }

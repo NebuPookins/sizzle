@@ -63,8 +63,11 @@ function MarkerIcon({ marker }: { marker: ProjectMarker }) {
 }
 
 export default function ProjectItem({ project, isSelected, isLaunched, onMarkerChange, onContextMenuRequest }: Props) {
-  const { selectProject, claudeStatus } = useAppStore()
-  const status = isLaunched ? (claudeStatus[project.path] ?? 'waiting') : null
+  const { selectProject, claudeStatus, shellStatus, terminalStates } = useAppStore()
+  const terminalState = terminalStates[project.path]
+  const isShellOnly = terminalState?.launchTarget === 'shell'
+  const agentDotStatus = isLaunched && !isShellOnly ? (claudeStatus[project.path] ?? 'waiting') : null
+  const shellDotStatus = isLaunched ? (shellStatus[project.path] ?? 'waiting') : null
   const markerColor = project.marker === 'favorite'
     ? '#f5c451'
     : project.marker === 'ignored'
@@ -96,8 +99,11 @@ export default function ProjectItem({ project, isSelected, isLaunched, onMarkerC
         if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'transparent'
       }}
     >
-      {status && <span className={`status-dot ${status}`} />}
-      {!status && <span style={{ width: 8 }} />}
+      <div className="status-dot-stack" aria-hidden="true">
+        {agentDotStatus && <span className={`status-dot ${agentDotStatus}`} />}
+        {shellDotStatus && <span className={`status-dot ${shellDotStatus}`} />}
+        {!agentDotStatus && !shellDotStatus && <span style={{ width: 8 }} />}
+      </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

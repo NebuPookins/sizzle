@@ -18,6 +18,7 @@ const GITHUB_TAB_ID = 'github'
 export default function TerminalView({ projectPath, launchTarget }: Props) {
   const {
     setClaudeStatus,
+    setShellStatus,
     unlaunchProject,
     terminalStates,
     setActiveTopTab,
@@ -377,6 +378,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           cwd={projectPath}
           command={shell}
           args={[]}
+          onStatusChange={(status) => setShellStatus(projectPath, status)}
           onExit={() => setShellExited(true)}
         />
       </div>
