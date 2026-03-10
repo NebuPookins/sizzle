@@ -30,6 +30,15 @@ const SOURCE_EXTENSIONS = new Set([
   '.lua', '.php', '.r', '.jl', '.asm', '.z80', '.as', '.mxml',
 ])
 
+const WEB_ENTRY_FILES = new Set([
+  'index.html',
+  'index.htm',
+])
+
+const WEB_ASSET_EXTENSIONS = new Set([
+  '.js', '.jsx', '.ts', '.tsx', '.css', '.scss', '.sass', '.less',
+])
+
 export function isProjectRoot(dir: string): boolean {
   let entries: string[]
   try {
@@ -46,6 +55,14 @@ export function isProjectRoot(dir: string): boolean {
 
   // Has a known manifest file
   if (entries.some((e) => MANIFEST_FILES.has(e))) return true
+
+  // Simple static web app: HTML entry point plus at least one companion asset file
+  if (
+    entries.some((entry) => WEB_ENTRY_FILES.has(entry.toLowerCase()))
+    && entries.some((entry) => WEB_ASSET_EXTENSIONS.has(path.extname(entry).toLowerCase()))
+  ) {
+    return true
+  }
 
   // Has >= 3 source files
   const sourceCount = entries.filter((e) => {
