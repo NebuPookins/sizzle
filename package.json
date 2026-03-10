@@ -28,7 +28,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "postinstall": "node scripts/rebuild-pty.cjs",
-    "dev": "electron-vite dev",
+    "dev": "node scripts/dev.mjs",
     "build": "electron-vite build",
     "preview": "electron-vite preview"
   },
