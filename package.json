@@ -2,6 +2,7 @@
   "name": "sizzle",
   "version": "0.1.0",
   "description": "Steam-like project launcher for myPrograms/",
+  "license": "AGPL-3.0-or-later",
   "main": "out/main/index.js",
   "scripts": {
     "postinstall": "node scripts/rebuild-pty.cjs",

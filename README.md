@@ -86,6 +86,10 @@ npm run dev -- --sizzle-config-dir=/tmp/sizzle-test
 
 This is useful for testing first-run behavior without touching your normal config.
 
+## License
+
+Sizzle is licensed under the GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`). See [LICENSE](LICENSE).
+
 ## First-Run Flow
 
 1. Launch the app.
