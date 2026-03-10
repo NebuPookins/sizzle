@@ -5,6 +5,8 @@ const MANIFEST_FILES = new Set([
   'Cargo.toml',
   'package.json',
   'go.mod',
+  'flex-config.xml',
+  'air-app.xml',
   'pyproject.toml',
   'setup.py',
   'pom.xml',
@@ -25,7 +27,7 @@ const SOURCE_EXTENSIONS = new Set([
   '.rs', '.ts', '.tsx', '.js', '.jsx', '.py', '.java', '.kt', '.go',
   '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.cs', '.rb', '.swift',
   '.scala', '.clj', '.ex', '.exs', '.hs', '.ml', '.elm', '.dart',
-  '.lua', '.php', '.r', '.jl', '.asm', '.z80',
+  '.lua', '.php', '.r', '.jl', '.asm', '.z80', '.as', '.mxml',
 ])
 
 export function isProjectRoot(dir: string): boolean {

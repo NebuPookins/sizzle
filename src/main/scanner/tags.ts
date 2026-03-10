@@ -22,6 +22,8 @@ const EXTENSION_LANGUAGES: Record<string, string> = {
   '.jsx': 'JavaScript',
   '.mjs': 'JavaScript',
   '.cjs': 'JavaScript',
+  '.as': 'ActionScript',
+  '.mxml': 'ActionScript',
   '.py': 'Python',
   '.go': 'Go',
   '.rs': 'Rust',
@@ -169,6 +171,8 @@ function applyManifestSignals(rootDir: string, scores: Map<string, number>): voi
   const manifestSignals: Array<{ file: string; tag: string; score: number }> = [
     { file: 'Cargo.toml', tag: 'Rust', score: 0.9 },
     { file: 'go.mod', tag: 'Go', score: 0.9 },
+    { file: 'flex-config.xml', tag: 'ActionScript', score: 0.9 },
+    { file: 'air-app.xml', tag: 'ActionScript', score: 0.85 },
     { file: 'pyproject.toml', tag: 'Python', score: 0.75 },
     { file: 'requirements.txt', tag: 'Python', score: 0.6 },
     { file: 'setup.py', tag: 'Python', score: 0.65 },
