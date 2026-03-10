@@ -143,7 +143,7 @@ export default function LeftPane({ onRefreshProjects }: Props) {
             fontSize: 12,
             textAlign: 'center',
           }}>
-            {search ? 'No matches' : 'Scanning projects…'}
+            {search ? 'No matches' : 'No projects yet. Choose scan settings to add a root folder.'}
           </div>
         )}
       </div>

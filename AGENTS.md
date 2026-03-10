@@ -1,14 +1,13 @@
 # Sizzle — Project Memory
 
 ## What it is
-Steam-like Electron + React/TypeScript desktop app. Lists projects under `/mnt/safe/home/nebu/myPrograms/`, shows README, launches Claude Code + shell split terminal.
+Steam-like Electron + React/TypeScript desktop app. Prompts for a projects root on first launch, then scans configurable directories, shows README, and launches Claude Code + shell split terminal.
 
 ## Key paths
-- Project root: `/mnt/safe/home/nebu/myPrograms/Typescript/sizzle/`
 - Main process: `src/main/index.ts`
 - Preload: `src/preload/index.ts`
 - Renderer entry: `src/renderer/main.tsx`
-- Metadata store: `~/.config/sizzle/db.json`
+- Metadata store: `~/.config/sizzle/db.json` by default, or `--sizzle-config-dir=/path/to/config`
 
 ## Stack
 - electron-vite 5.0.0 (supports Vite 6), Electron 33, React 19, Zustand 5

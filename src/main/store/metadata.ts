@@ -1,10 +1,8 @@
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
+import { DB_PATH, SIZZLE_CONFIG_DIR } from '../paths'
 
-const CONFIG_DIR = path.join(os.homedir(), '.config', 'sizzle')
-const DB_PATH = path.join(CONFIG_DIR, 'db.json')
-const TMP_PATH = path.join(CONFIG_DIR, 'db.json.tmp')
+const TMP_PATH = path.join(SIZZLE_CONFIG_DIR, 'db.json.tmp')
 
 interface ProjectMeta {
   lastLaunched: number | null
@@ -36,7 +34,6 @@ interface DB {
 }
 
 let cache: DB | null = null
-const DEFAULT_SCAN_ROOT = '/mnt/safe/home/nebu/myPrograms'
 
 function normalizeRootPath(rootPath: string): string {
   return path.resolve(rootPath.trim())
@@ -59,15 +56,15 @@ function getNormalizedScanSettings(db: DB): ScanSettings {
   const ignoreRoots = sanitizeRootList(db.scanSettings?.ignoreRoots)
   const manualProjectRoots = sanitizeRootList(db.scanSettings?.manualProjectRoots)
   return {
-    scanRoots: scanRoots.length > 0 ? scanRoots : [DEFAULT_SCAN_ROOT],
+    scanRoots,
     ignoreRoots,
     manualProjectRoots,
   }
 }
 
 function ensureDir(): void {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true })
+  if (!fs.existsSync(SIZZLE_CONFIG_DIR)) {
+    fs.mkdirSync(SIZZLE_CONFIG_DIR, { recursive: true })
   }
 }
 
@@ -203,10 +200,16 @@ export function setProjectMarker(projectPath: string, marker: ProjectMarker): Pr
 
 export function getScanSettings(): ScanSettings {
   const db = readDB()
+  if (!db.scanSettings) {
+    return {
+      scanRoots: [],
+      ignoreRoots: [],
+      manualProjectRoots: [],
+    }
+  }
   const normalized = getNormalizedScanSettings(db)
   if (
-    !db.scanSettings
-    || db.scanSettings.scanRoots?.length !== normalized.scanRoots.length
+    db.scanSettings.scanRoots?.length !== normalized.scanRoots.length
     || db.scanSettings.ignoreRoots?.length !== normalized.ignoreRoots.length
     || db.scanSettings.manualProjectRoots?.length !== normalized.manualProjectRoots.length
     || db.scanSettings.scanRoots?.some((value, index) => value !== normalized.scanRoots[index])
@@ -225,9 +228,6 @@ export function setScanSettings(settings: ScanSettings): ScanSettings {
     scanRoots: sanitizeRootList(settings.scanRoots),
     ignoreRoots: sanitizeRootList(settings.ignoreRoots),
     manualProjectRoots: sanitizeRootList(settings.manualProjectRoots),
-  }
-  if (normalized.scanRoots.length === 0) {
-    normalized.scanRoots = [DEFAULT_SCAN_ROOT]
   }
   db.scanSettings = normalized
   writeDB(db)

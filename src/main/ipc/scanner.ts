@@ -4,7 +4,7 @@ import path from 'path'
 import yauzl from 'yauzl'
 import { scanForProjects } from '../scanner'
 import { detectProjectTags } from '../scanner/tags'
-import { getScanSettings, setScanSettings } from '../store/metadata'
+import { type ScanSettings, getScanSettings, setScanSettings } from '../store/metadata'
 
 const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 const MAX_MEDIA_PREVIEW_BYTES = 30 * 1024 * 1024
@@ -72,6 +72,27 @@ const MEDIA_MIME_BY_EXTENSION: Record<string, string> = {
 
 function normalizePath(inputPath: string): string {
   return path.resolve(inputPath)
+}
+
+async function ensureScanSettingsConfigured(): Promise<ScanSettings> {
+  const settings = getScanSettings()
+  if (settings.scanRoots.length > 0) return settings
+
+  const result = await dialog.showOpenDialog({
+    title: 'Choose a projects root folder',
+    message: 'Select the directory Sizzle should scan for projects.',
+    buttonLabel: 'Use this folder',
+    properties: ['openDirectory', 'createDirectory'],
+  })
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return settings
+  }
+
+  return setScanSettings({
+    ...settings,
+    scanRoots: [result.filePaths[0]],
+  })
 }
 
 function isWithinRoot(rootPath: string, candidatePath: string): boolean {
@@ -295,7 +316,8 @@ function getProjectRepositoryInfo(projectPath: string): ProjectRepositoryInfo {
 
 export function registerScannerHandlers(): void {
   ipcMain.handle('scanner:scan', async () => {
-    const settings = getScanSettings()
+    const settings = await ensureScanSettingsConfigured()
+    if (settings.scanRoots.length === 0) return []
     const scanned = await scanForProjects(
       settings.scanRoots,
       settings.ignoreRoots,

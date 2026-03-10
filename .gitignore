@@ -27,3 +27,11 @@ build/Release/
 # Environment
 .env
 .env.local
+.env.*
+!.env.example
+!.env.*.example
+
+# Common secret-bearing local config
+.npmrc
+*.pem
+*.key
