@@ -39,6 +39,11 @@ const WEB_ASSET_EXTENSIONS = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.css', '.scss', '.sass', '.less',
 ])
 
+function isDocumentationMarker(entryName: string): boolean {
+  const lower = entryName.toLowerCase()
+  return lower.startsWith('readme') || lower === 'agents.md'
+}
+
 export function isProjectRoot(dir: string): boolean {
   let entries: string[]
   try {
@@ -50,8 +55,8 @@ export function isProjectRoot(dir: string): boolean {
   // Has .git directory
   if (entries.includes('.git')) return true
 
-  // Has README
-  if (entries.some((e) => e.toLowerCase().startsWith('readme'))) return true
+  // Has README or AGENTS.md
+  if (entries.some(isDocumentationMarker)) return true
 
   // Has a known manifest file
   if (entries.some((e) => MANIFEST_FILES.has(e))) return true
