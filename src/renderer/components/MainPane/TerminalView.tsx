@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { useAppStore } from '../../store/appStore'
 import type { LaunchTarget } from '../../store/appStore'
 import { getAgent } from '../../agents'
-import XtermPane from './XtermPane'
+import XtermPane, { type XtermPaneHandle } from './XtermPane'
 import FileExplorerPane from './FileExplorerPane'
 
 interface Props {
@@ -40,9 +40,11 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const shellTabs = terminalState?.shellTabs ?? [0]
   const activeShellTab = terminalState?.activeShellTab ?? shellTabs[0]
   const activeTopTab = terminalState?.activeTopTab ?? 'terminal'
+  const nextShellSession = terminalState?.nextShellSession ?? 1
   const shell = window.sizzle.defaultShell || '/bin/bash'
   const agent = isShellOnly ? null : getAgent(launchTarget)
   const [agentArgs, setAgentArgs] = useState<string[] | null>(null)
+  const shellRefs = useRef<Map<number, XtermPaneHandle>>(new Map())
   const tabName = (filePath: string) => filePath.split('/').pop() ?? filePath
   const allShellsExited = shellTabs.length > 0 && shellTabs.every((shellSession) => exitedShells.includes(shellSession))
   const activeShellExited = exitedShells.includes(activeShellTab)
@@ -365,7 +367,10 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                 }}
               >
                 <button
-                  onClick={() => setActiveShellTab(projectPath, shellSession)}
+                  onClick={() => {
+                    setActiveShellTab(projectPath, shellSession)
+                    requestAnimationFrame(() => shellRefs.current.get(shellSession)?.focus())
+                  }}
                   style={{
                     border: 'none',
                     background: 'transparent',
@@ -383,7 +388,11 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                   <button
                     onClick={() => {
                       window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+                      const focusSession = shellSession === activeShellTab
+                        ? shellTabs[Math.max(0, shellTabs.indexOf(shellSession) - 1)] ?? shellTabs[0]
+                        : activeShellTab
                       closeShellTab(projectPath, shellSession)
+                      requestAnimationFrame(() => shellRefs.current.get(focusSession)?.focus())
                     }}
                     style={{
                       border: 'none',
@@ -403,7 +412,11 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             )
           })}
           <button
-            onClick={() => createShellTab(projectPath)}
+            onClick={() => {
+              const newSession = nextShellSession
+              createShellTab(projectPath)
+              requestAnimationFrame(() => shellRefs.current.get(newSession)?.focus())
+            }}
             style={{
               border: 'none',
               background: 'transparent',
@@ -487,6 +500,10 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           >
             <XtermPane
               key={`shell-${shellSession}`}
+              ref={(handle) => {
+                if (handle) shellRefs.current.set(shellSession, handle)
+                else shellRefs.current.delete(shellSession)
+              }}
               id={`shell-${projectPath}-${shellSession}`}
               cwd={projectPath}
               command={shell}

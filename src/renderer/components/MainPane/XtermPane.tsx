@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -13,7 +13,11 @@ interface Props {
   onExit?: () => void
 }
 
-export default function XtermPane({
+export interface XtermPaneHandle {
+  focus: () => void
+}
+
+const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
   id,
   cwd,
   command,
@@ -21,11 +25,15 @@ export default function XtermPane({
   initialCommand,
   onStatusChange,
   onExit,
-}: Props) {
+}, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const onExitRef = useRef(onExit)
+
+  useImperativeHandle(ref, () => ({
+    focus: () => termRef.current?.focus(),
+  }))
 
   useEffect(() => {
     onExitRef.current = onExit
@@ -159,4 +167,6 @@ export default function XtermPane({
       }}
     />
   )
-}
+})
+
+export default XtermPane
