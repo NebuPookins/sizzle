@@ -35,6 +35,17 @@ const clients = new Set<ClientState>()
 let idleShutdownTimer: ReturnType<typeof setTimeout> | null = null
 let shuttingDown = false
 
+// Use the pre-Electron environment forwarded by the main process, so that
+// user shells don't inherit Electron-injected variables like ELECTRON_RUN_AS_NODE.
+const shellBaseEnv: NodeJS.ProcessEnv = (() => {
+  try {
+    if (process.env.SIZZLE_PRE_ELECTRON_ENV) {
+      return JSON.parse(process.env.SIZZLE_PRE_ELECTRON_ENV) as NodeJS.ProcessEnv
+    }
+  } catch {}
+  return process.env
+})()
+
 function getArgValue(name: string): string | null {
   const prefix = `${name}=`
   const arg = process.argv.find((value) => value.startsWith(prefix))
@@ -122,7 +133,7 @@ function handleCreate(client: ClientState, requestId: string, id: string, cwd: s
     rows: 24,
     cwd,
     env: {
-      ...process.env,
+      ...shellBaseEnv,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
     },

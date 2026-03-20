@@ -5,6 +5,49 @@ import { spawn } from 'child_process'
 import type { HostInfo, PtyRequest, PtyRequestWithoutId, PtyResponse } from './protocol'
 import { PTY_HOST_INFO_PATH } from '../paths'
 
+// Capture the environment as it was before npm and Electron modified process.env.
+//
+// In dev mode, scripts/dev.mjs runs before Electron and pre-captures the env
+// (stripping npm_* vars, which npm exclusively sets) into SIZZLE_PRE_ELECTRON_ENV.
+// We prefer that here because it's captured at the earliest possible point.
+//
+// In production, the Electron binary is exec'd directly from the user's shell with
+// no npm wrapper, so /proc/self/environ (Linux) holds the clean pre-Electron env.
+// Electron mutates process.env in memory but cannot alter that file.
+function capturePreElectronEnv(): NodeJS.ProcessEnv {
+  if (process.env.SIZZLE_PRE_ELECTRON_ENV) {
+    try {
+      return JSON.parse(process.env.SIZZLE_PRE_ELECTRON_ENV) as NodeJS.ProcessEnv
+    } catch {
+      // fall through
+    }
+  }
+  if (process.platform === 'linux') {
+    try {
+      const raw = fs.readFileSync('/proc/self/environ')
+      const env: NodeJS.ProcessEnv = {}
+      for (const entry of raw.toString('latin1').split('\0')) {
+        const eq = entry.indexOf('=')
+        if (eq === -1) continue
+        env[entry.slice(0, eq)] = entry.slice(eq + 1)
+      }
+      return env
+    } catch {
+      // fall through
+    }
+  }
+  // Last-resort heuristic: strip known Electron-injected vars.
+  const env: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith('ELECTRON_')) continue
+    env[key] = value
+  }
+  if (process.env.ORIGINAL_XDG_CURRENT_DESKTOP !== undefined) {
+    env['XDG_CURRENT_DESKTOP'] = process.env.ORIGINAL_XDG_CURRENT_DESKTOP
+  }
+  return env
+}
+
 type EventListener = (message: Extract<PtyResponse, { type: 'event' }>) => void
 
 class PtyHostClient {
@@ -167,6 +210,11 @@ class PtyHostClient {
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: '1',
+        // Pass the pre-Electron environment to the daemon so it can spawn
+        // user shells with the original environment. The daemon is exec'd
+        // from Electron, so its own process.env and /proc/self/environ are
+        // already polluted — we must forward the clean env explicitly.
+        SIZZLE_PRE_ELECTRON_ENV: JSON.stringify(capturePreElectronEnv()),
       },
     })
     child.unref()

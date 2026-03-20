@@ -40,6 +40,16 @@ if (electronAppArgs.length > 0) {
 const childEnv = { ...process.env }
 delete childEnv.ELECTRON_RUN_AS_NODE
 
+// Capture the user's environment before npm and Electron add their own variables.
+// npm_ vars are set exclusively by npm (well-defined convention, not a heuristic).
+// We do this here because dev.mjs runs before Electron starts.
+const preElectronEnv = {}
+for (const [key, value] of Object.entries(process.env)) {
+  if (key.startsWith('npm_')) continue
+  if (value !== undefined) preElectronEnv[key] = value
+}
+childEnv.SIZZLE_PRE_ELECTRON_ENV = JSON.stringify(preElectronEnv)
+
 const child = spawn(process.execPath, childArgs, {
   cwd: projectRoot,
   stdio: 'inherit',
