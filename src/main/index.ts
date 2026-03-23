@@ -20,7 +20,6 @@ function configureExternalLinks(contents: WebContents): void {
 async function loadMainWindow(window: BrowserWindow): Promise<void> {
   if (process.env.ELECTRON_RENDERER_URL) {
     await window.loadURL(process.env.ELECTRON_RENDERER_URL)
-    window.webContents.openDevTools()
     return
   }
 
