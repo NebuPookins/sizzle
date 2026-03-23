@@ -11,6 +11,8 @@ interface Props {
   initialCommand?: string
   onStatusChange?: (status: 'working' | 'waiting') => void
   onExit?: () => void
+  onFocus?: () => void
+  onBlur?: () => void
 }
 
 export interface XtermPaneHandle {
@@ -25,6 +27,8 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
   initialCommand,
   onStatusChange,
   onExit,
+  onFocus,
+  onBlur,
 }, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -78,6 +82,12 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
 
     termRef.current = term
     fitRef.current = fitAddon
+
+    const textarea = containerRef.current?.querySelector('textarea')
+    const handleFocus = () => onFocus?.()
+    const handleBlur = () => onBlur?.()
+    textarea?.addEventListener('focus', handleFocus)
+    textarea?.addEventListener('blur', handleBlur)
 
     // Status tracking for Claude pane
     let statusTimer: ReturnType<typeof setTimeout> | null = null
@@ -144,6 +154,8 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
     return () => {
       if (statusTimer) clearTimeout(statusTimer)
       if (resizeTimer) clearTimeout(resizeTimer)
+      textarea?.removeEventListener('focus', handleFocus)
+      textarea?.removeEventListener('blur', handleBlur)
       unsubData()
       unsubExit()
       disposeOnData.dispose()

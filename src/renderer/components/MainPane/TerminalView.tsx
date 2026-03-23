@@ -32,6 +32,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const [agentExited, setAgentExited] = useState(false)
   const [exitedShells, setExitedShells] = useState<number[]>([])
   const [shellActivity, setShellActivity] = useState<Record<number, 'working' | 'waiting'>>({})
+  const [focusedPane, setFocusedPane] = useState<'agent' | 'shell' | null>(null)
   const [markdownFiles, setMarkdownFiles] = useState<string[]>([])
   const [activeMarkdown, setActiveMarkdown] = useState<string | null>(null)
   const [githubUrl, setGithubUrl] = useState<string | null>(null)
@@ -135,18 +136,21 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
         <div style={{
           display: 'flex',
           flexShrink: 0,
-          background: 'var(--bg-panel)',
+          background: focusedPane === 'agent' ? 'var(--bg-hover)' : 'var(--bg-panel)',
           alignItems: 'center',
           gap: 8,
+          borderLeft: focusedPane === 'agent' ? '3px solid var(--accent)' : '3px solid transparent',
+          transition: 'border-left-color 0.1s, background 0.1s',
         }}>
           <div style={{
             flexShrink: 0,
             padding: '5px 12px',
             fontSize: 11,
-            color: 'var(--text-muted)',
+            color: focusedPane === 'agent' ? 'var(--accent)' : 'var(--text-muted)',
             fontWeight: 600,
             letterSpacing: '0.06em',
             textTransform: 'uppercase',
+            transition: 'color 0.1s',
           }}>
             {agent!.label}
           </div>
@@ -279,6 +283,8 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             minHeight: 0,
             display: activeTopTab === 'terminal' ? 'flex' : 'none',
             flexDirection: 'column',
+            opacity: focusedPane === 'shell' ? 0.35 : 1,
+            transition: 'opacity 0.15s',
           }}>
             {agentArgs !== null && (
               <XtermPane
@@ -289,6 +295,8 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                 args={agentArgs}
                 onStatusChange={(status) => setClaudeStatus(projectPath, status)}
                 onExit={() => setAgentExited(true)}
+                onFocus={() => setFocusedPane('agent')}
+                onBlur={() => setFocusedPane((p) => p === 'agent' ? null : p)}
               />
             )}
           </div>
@@ -300,6 +308,8 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             overflowY: activeTopTab === 'explorer' || activeTopTab === GITHUB_TAB_ID ? 'hidden' : 'auto',
             padding: activeTopTab === 'explorer' ? 0 : activeTopTab === GITHUB_TAB_ID ? '14px' : '18px 20px',
             background: '#0f0f1a',
+            opacity: focusedPane === 'shell' ? 0.35 : 1,
+            transition: 'opacity 0.15s',
           }}>
             {activeTopTab === 'explorer' && (
               <FileExplorerPane projectPath={projectPath} />
@@ -338,18 +348,21 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       <div style={{
         display: 'flex',
           flexShrink: 0,
-          background: 'var(--bg-panel)',
+          background: focusedPane === 'shell' ? 'var(--bg-hover)' : 'var(--bg-panel)',
           alignItems: 'center',
           gap: 8,
+          borderLeft: focusedPane === 'shell' ? '3px solid var(--accent)' : '3px solid transparent',
+          transition: 'border-left-color 0.1s, background 0.1s',
         }}>
         <div style={{
           flexShrink: 0,
           padding: '5px 12px',
           fontSize: 11,
-          color: 'var(--text-muted)',
+          color: focusedPane === 'shell' ? 'var(--accent)' : 'var(--text-muted)',
           fontWeight: 600,
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
+          transition: 'color 0.1s',
         }}>
           Shell
         </div>
@@ -487,7 +500,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       </div>
 
       {/* Shell terminal */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', opacity: focusedPane === 'agent' ? 0.35 : 1, transition: 'opacity 0.15s' }}>
         {shellTabs.map((shellSession) => (
           <div
             key={`shell-pane-${shellSession}`}
@@ -515,6 +528,8 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                 setExitedShells((current) => (current.includes(shellSession) ? current : [...current, shellSession]))
                 setShellActivity((current) => ({ ...current, [shellSession]: 'waiting' }))
               }}
+              onFocus={() => setFocusedPane('shell')}
+              onBlur={() => setFocusedPane((p) => p === 'shell' ? null : p)}
             />
           </div>
         ))}
