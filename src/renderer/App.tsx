@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useAppStore, Project } from './store/appStore'
 import LeftPane from './components/LeftPane/LeftPane'
 import MainPane from './components/MainPane/MainPane'
+import GitStatusPane from './components/GitStatusPane/GitStatusPane'
 import type { ProjectTag } from '../preload'
 
 const PROJECT_REFRESH_INTERVAL_MS = 10_000
@@ -11,7 +12,7 @@ function sortTags(tags: ProjectTag[]): ProjectTag[] {
 }
 
 export default function App() {
-  const { setProjects, hydrateReloadSnapshot, reloadMessage, setReloadMessage } = useAppStore()
+  const { setProjects, hydrateReloadSnapshot, reloadMessage, setReloadMessage, selectedProject } = useAppStore()
   const isLoadingProjectsRef = useRef(false)
 
   const loadProjects = useCallback(async () => {
@@ -101,6 +102,7 @@ export default function App() {
       )}
       <LeftPane onRefreshProjects={loadProjects} />
       <MainPane />
+      {selectedProject && <GitStatusPane projectPath={selectedProject.path} />}
     </div>
   )
 }

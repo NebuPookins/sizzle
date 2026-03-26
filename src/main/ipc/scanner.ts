@@ -1,10 +1,14 @@
 import { dialog, ipcMain } from 'electron'
 import fs from 'fs'
 import path from 'path'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import yauzl from 'yauzl'
 import { scanForProjects } from '../scanner'
 import { detectProjectTags } from '../scanner/tags'
 import { type ScanSettings, getScanSettings, setScanSettings } from '../store/metadata'
+
+const execFileAsync = promisify(execFile)
 
 const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 const MAX_MEDIA_PREVIEW_BYTES = 30 * 1024 * 1024
@@ -36,6 +40,115 @@ export interface FilePreview {
 export interface ProjectRepositoryInfo {
   isGitRepo: boolean
   githubUrl: string | null
+}
+
+export interface GitFileChange {
+  status: string
+  path: string
+  origPath?: string
+}
+
+export interface GitStatus {
+  branch: string | null
+  upstream: string | null
+  ahead: number
+  behind: number
+  staged: GitFileChange[]
+  unstaged: GitFileChange[]
+  untracked: string[]
+  isDetached: boolean
+}
+
+function parseGitStatus(stdout: string): GitStatus {
+  const lines = stdout.split('\n')
+  let branch: string | null = null
+  let upstream: string | null = null
+  let ahead = 0
+  let behind = 0
+  let isDetached = false
+  const staged: GitFileChange[] = []
+  const unstaged: GitFileChange[] = []
+  const untracked: string[] = []
+
+  for (const line of lines) {
+    if (line.startsWith('## ')) {
+      const branchLine = line.slice(3)
+      if (branchLine.startsWith('HEAD (no branch)')) {
+        isDetached = true
+        continue
+      }
+      const noCommitsMatch = branchLine.match(/^No commits yet on (.+)$/)
+      if (noCommitsMatch) {
+        branch = noCommitsMatch[1].trim()
+        continue
+      }
+      const dotDotDotIdx = branchLine.indexOf('...')
+      if (dotDotDotIdx === -1) {
+        branch = branchLine
+      } else {
+        branch = branchLine.slice(0, dotDotDotIdx)
+        const rest = branchLine.slice(dotDotDotIdx + 3)
+        const bracketIdx = rest.indexOf(' [')
+        upstream = bracketIdx === -1 ? rest : rest.slice(0, bracketIdx)
+        if (bracketIdx !== -1) {
+          const bracketContent = rest.slice(bracketIdx + 2, rest.lastIndexOf(']'))
+          const aheadMatch = bracketContent.match(/ahead (\d+)/)
+          const behindMatch = bracketContent.match(/behind (\d+)/)
+          if (aheadMatch) ahead = parseInt(aheadMatch[1], 10)
+          if (behindMatch) behind = parseInt(behindMatch[1], 10)
+        }
+      }
+      continue
+    }
+
+    if (line.length < 3) continue
+    const x = line[0]
+    const y = line[1]
+    const rawPath = line.slice(3)
+
+    if (x === '?' && y === '?') {
+      untracked.push(rawPath)
+      continue
+    }
+    if (x === '!' && y === '!') continue
+
+    if (x !== ' ') {
+      let filePath = rawPath
+      let origPath: string | undefined
+      if (x === 'R' || x === 'C') {
+        const tabIdx = rawPath.indexOf('\t')
+        const arrowIdx = rawPath.indexOf(' -> ')
+        if (tabIdx !== -1) {
+          origPath = rawPath.slice(0, tabIdx)
+          filePath = rawPath.slice(tabIdx + 1)
+        } else if (arrowIdx !== -1) {
+          origPath = rawPath.slice(0, arrowIdx)
+          filePath = rawPath.slice(arrowIdx + 4)
+        }
+      }
+      staged.push({ status: x, path: filePath, origPath })
+    }
+
+    if (y !== ' ') {
+      const tabIdx = rawPath.indexOf('\t')
+      unstaged.push({ status: y, path: tabIdx !== -1 ? rawPath.slice(0, tabIdx) : rawPath })
+    }
+  }
+
+  return { branch, upstream, ahead, behind, staged, unstaged, untracked, isDetached }
+}
+
+async function fetchGitStatus(projectPath: string): Promise<GitStatus | null> {
+  try {
+    const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-b'], {
+      cwd: projectPath,
+      env: process.env,
+      maxBuffer: 512 * 1024,
+    })
+    return parseGitStatus(stdout)
+  } catch {
+    return null
+  }
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -400,6 +513,10 @@ export function registerScannerHandlers(): void {
 
   ipcMain.handle('project:getRepositoryInfo', async (_event, projectPath: string) => {
     return getProjectRepositoryInfo(projectPath)
+  })
+
+  ipcMain.handle('git:getStatus', async (_event, projectPath: string) => {
+    return fetchGitStatus(projectPath)
   })
 
   ipcMain.handle('files:listDirectory', async (_event, projectPath: string, directoryPath?: string) => {

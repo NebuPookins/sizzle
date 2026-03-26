@@ -8,6 +8,7 @@ import type {
   ArchiveTreeNode,
   FilePreview,
   ProjectRepositoryInfo,
+  GitStatus,
   PtyOpenResult,
   ScanSettings,
 } from '../preload/index'
@@ -36,6 +37,7 @@ declare global {
       getMarkdownFiles(projectPath: string): Promise<string[]>
       readMarkdownFile(filePath: string): Promise<string | null>
       getProjectRepositoryInfo(projectPath: string): Promise<ProjectRepositoryInfo>
+      getGitStatus(projectPath: string): Promise<GitStatus | null>
       listDirectory(projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]>
       previewFile(projectPath: string, filePath: string): Promise<FilePreview>
       getMetadata(projectPath: string): Promise<ProjectMeta>

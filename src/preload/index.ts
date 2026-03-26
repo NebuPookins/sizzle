@@ -61,6 +61,23 @@ export interface ProjectRepositoryInfo {
   githubUrl: string | null
 }
 
+export interface GitFileChange {
+  status: string
+  path: string
+  origPath?: string
+}
+
+export interface GitStatus {
+  branch: string | null
+  upstream: string | null
+  ahead: number
+  behind: number
+  staged: GitFileChange[]
+  unstaged: GitFileChange[]
+  untracked: string[]
+  isDetached: boolean
+}
+
 export interface PtyOpenResult {
   replay: string
   exitCode: number | null
@@ -96,6 +113,9 @@ const api = {
 
   getProjectRepositoryInfo: (projectPath: string): Promise<ProjectRepositoryInfo> =>
     ipcRenderer.invoke('project:getRepositoryInfo', projectPath),
+
+  getGitStatus: (projectPath: string): Promise<GitStatus | null> =>
+    ipcRenderer.invoke('git:getStatus', projectPath),
 
   listDirectory: (projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]> =>
     ipcRenderer.invoke('files:listDirectory', projectPath, directoryPath),
