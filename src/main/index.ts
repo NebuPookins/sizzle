@@ -5,6 +5,7 @@ import { registerPtyHandlers } from './ipc/pty'
 import { registerMetadataHandlers } from './ipc/metadata'
 import { registerClaudeHandlers } from './ipc/claude'
 import { registerAppReloadHandlers } from './ipc/appReload'
+import { registerGitWatcherHandlers } from './ipc/gitWatcher'
 import { getQuitMode, signalReloadReady } from './appReload'
 import { ptyHostClient } from './pty/client'
 
@@ -70,6 +71,7 @@ app.whenReady().then(() => {
   registerMetadataHandlers()
   registerClaudeHandlers()
   registerAppReloadHandlers(() => mainWindow)
+  registerGitWatcherHandlers()
   createWindow()
 
   app.on('activate', () => {

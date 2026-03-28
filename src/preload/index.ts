@@ -117,6 +117,19 @@ const api = {
   getGitStatus: (projectPath: string): Promise<GitStatus | null> =>
     ipcRenderer.invoke('git:getStatus', projectPath),
 
+  gitWatch: (projectPath: string): Promise<void> =>
+    ipcRenderer.invoke('git:watch', projectPath),
+
+  gitUnwatch: (projectPath: string): Promise<void> =>
+    ipcRenderer.invoke('git:unwatch', projectPath),
+
+  onGitChanged: (callback: (projectPath: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, projectPath: string) =>
+      callback(projectPath)
+    ipcRenderer.on('git:changed', handler)
+    return () => ipcRenderer.removeListener('git:changed', handler)
+  },
+
   listDirectory: (projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]> =>
     ipcRenderer.invoke('files:listDirectory', projectPath, directoryPath),
 
