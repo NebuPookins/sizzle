@@ -75,6 +75,10 @@ export default function App() {
   }, [loadProjects])
 
   useEffect(() => {
+    window.sizzle.setWindowTitle(selectedProject?.name ?? null)
+  }, [selectedProject])
+
+  useEffect(() => {
     if (!reloadMessage) return
     const timer = window.setTimeout(() => setReloadMessage(null), 4000)
     return () => window.clearTimeout(timer)

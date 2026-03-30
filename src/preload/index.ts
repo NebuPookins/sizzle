@@ -191,6 +191,9 @@ const api = {
     ipcRenderer.on('pty:exit', handler)
     return () => ipcRenderer.removeListener('pty:exit', handler)
   },
+
+  setWindowTitle: (projectName: string | null): void =>
+    ipcRenderer.send('window:setTitle', projectName),
 }
 
 contextBridge.exposeInMainWorld('sizzle', api)

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, WebContents } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, WebContents } from 'electron'
 import path from 'path'
 import { registerScannerHandlers } from './ipc/scanner'
 import { registerPtyHandlers } from './ipc/pty'
@@ -72,6 +72,12 @@ app.whenReady().then(() => {
   registerClaudeHandlers()
   registerAppReloadHandlers(() => mainWindow)
   registerGitWatcherHandlers()
+
+  ipcMain.on('window:setTitle', (_event, projectName: string | null) => {
+    if (!mainWindow) return
+    mainWindow.setTitle(projectName ? `Sizzle - ${projectName}` : 'Sizzle')
+  })
+
   createWindow()
 
   app.on('activate', () => {
