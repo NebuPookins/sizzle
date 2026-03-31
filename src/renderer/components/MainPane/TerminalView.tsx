@@ -107,6 +107,29 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     }
   }, [projectPath])
 
+  // Watch for markdown files being added or removed in the project directory
+  useEffect(() => {
+    void window.sizzle.gitWatch(projectPath)
+    const unsub = window.sizzle.onGitChanged((changedPath) => {
+      if (changedPath !== projectPath) return
+      window.sizzle.getMarkdownFiles(projectPath).then((newFiles) => {
+        setMarkdownFiles((prev) => {
+          const same =
+            prev.length === newFiles.length && prev.every((f, i) => f === newFiles[i])
+          if (same) return prev
+          return newFiles
+        })
+        const currentTab = useAppStore.getState().terminalStates[projectPath]?.activeTopTab ?? 'terminal'
+        if (currentTab !== 'terminal' && currentTab !== 'explorer' && currentTab !== GITHUB_TAB_ID) {
+          if (!newFiles.includes(currentTab)) {
+            setActiveTopTab(projectPath, newFiles.length > 0 ? newFiles[0] : 'terminal')
+          }
+        }
+      })
+    })
+    return unsub
+  }, [projectPath])
+
   useEffect(() => {
     if (activeTopTab === 'terminal' || activeTopTab === 'explorer' || activeTopTab === GITHUB_TAB_ID) return
 
