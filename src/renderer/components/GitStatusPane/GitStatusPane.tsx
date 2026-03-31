@@ -291,7 +291,7 @@ export default function GitStatusPane({ projectPath }: Props) {
           {status.unstaged.map((f, i) => <FileRow key={i} change={f} />)}
         </Section>
 
-        <Section title="Untracked" count={status.untracked.length} color="var(--text-secondary)" defaultOpen={false}>
+        <Section title="Untracked" count={status.untracked.length} color="var(--text-secondary)" defaultOpen={true}>
           {status.untracked.map((f, i) => <UntrackedRow key={i} filePath={f} />)}
         </Section>
       </div>
