@@ -47,6 +47,7 @@ const EXTENSION_LANGUAGES: Record<string, string> = {
   '.clj': 'Clojure',
   '.hs': 'Haskell',
   '.ml': 'OCaml',
+  '.gd': 'GDScript',
   '.lua': 'Lua',
   '.r': 'R',
   '.jl': 'Julia',
@@ -83,6 +84,7 @@ const FRAMEWORK_RULES: FrameworkRule[] = [
   { tag: 'Ruby on Rails', files: ['config.ru'], manifests: ['Gemfile'] },
   { tag: 'Unity', files: ['Assets', 'ProjectSettings/ProjectVersion.txt'], manifests: ['Packages/manifest.json'] },
   { tag: 'raylib', files: ['raylib.h'], manifests: ['dub.json', 'dub.sdl', 'CMakeLists.txt'] },
+  { tag: 'Godot', files: ['project.godot'] },
 ]
 
 function clamp01(value: number): number {
