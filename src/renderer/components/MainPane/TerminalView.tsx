@@ -107,11 +107,9 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     }
   }, [projectPath])
 
-  // Watch for markdown files being added or removed in the project directory
+  // Poll for markdown files being added or removed in the project directory
   useEffect(() => {
-    void window.sizzle.gitWatch(projectPath)
-    const unsub = window.sizzle.onGitChanged((changedPath) => {
-      if (changedPath !== projectPath) return
+    const id = window.setInterval(() => {
       window.sizzle.getMarkdownFiles(projectPath).then((newFiles) => {
         setMarkdownFiles((prev) => {
           const same =
@@ -126,9 +124,9 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           }
         }
       })
-    })
-    return unsub
-  }, [projectPath])
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [projectPath, setActiveTopTab])
 
   useEffect(() => {
     if (activeTopTab === 'terminal' || activeTopTab === 'explorer' || activeTopTab === GITHUB_TAB_ID) return

@@ -40,11 +40,9 @@ export default function MarkdownView({ project }: Props) {
     })
   }, [project.path])
 
-  // Watch for markdown files being added or removed in the project directory
+  // Poll for markdown files being added or removed in the project directory
   useEffect(() => {
-    void window.sizzle.gitWatch(project.path)
-    const unsub = window.sizzle.onGitChanged((changedPath) => {
-      if (changedPath !== project.path) return
+    const id = window.setInterval(() => {
       window.sizzle.getMarkdownFiles(project.path).then((newFiles) => {
         setFiles((prev) => {
           const same =
@@ -54,18 +52,16 @@ export default function MarkdownView({ project }: Props) {
         })
         setActiveFile((prev) => {
           if (prev === null || prev === 'explorer' || prev === GITHUB_TAB_ID) {
-            // If we now have files and weren't showing one, switch to the first
             return newFiles.length > 0 ? newFiles[0] : prev
           }
-          // If the active file was deleted, fall back to first available
           if (!newFiles.includes(prev)) {
             return newFiles.length > 0 ? newFiles[0] : 'explorer'
           }
           return prev
         })
       })
-    })
-    return unsub
+    }, 5000)
+    return () => window.clearInterval(id)
   }, [project.path])
 
   useEffect(() => {

@@ -38,9 +38,6 @@ declare global {
       readMarkdownFile(filePath: string): Promise<string | null>
       getProjectRepositoryInfo(projectPath: string): Promise<ProjectRepositoryInfo>
       getGitStatus(projectPath: string): Promise<GitStatus | null>
-      gitWatch(projectPath: string): Promise<void>
-      gitUnwatch(projectPath: string): Promise<void>
-      onGitChanged(callback: (projectPath: string) => void): () => void
       listDirectory(projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]>
       previewFile(projectPath: string, filePath: string): Promise<FilePreview>
       getMetadata(projectPath: string): Promise<ProjectMeta>

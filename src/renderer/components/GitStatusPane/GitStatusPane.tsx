@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { GitStatus, GitFileChange } from '../../../preload'
 
 interface Props {
@@ -153,30 +153,39 @@ function Section({
   )
 }
 
+const POLL_INTERVAL_MS = 5000
+
 export default function GitStatusPane({ projectPath }: Props) {
   const [isGitRepo, setIsGitRepo] = useState<boolean | null>(null)
   const [status, setStatus] = useState<GitStatus | null>(null)
+  const [lastRefresh, setLastRefresh] = useState(0)
+  const fetchingRef = useRef(false)
 
   const refresh = useCallback(async () => {
-    const result = await window.sizzle.getGitStatus(projectPath)
-    setStatus(result)
-    setIsGitRepo(result !== null)
+    if (fetchingRef.current) return
+    fetchingRef.current = true
+    try {
+      const result = await window.sizzle.getGitStatus(projectPath)
+      setStatus(result)
+      setIsGitRepo(result !== null)
+    } finally {
+      fetchingRef.current = false
+      setLastRefresh(Date.now())
+    }
   }, [projectPath])
 
-  // Initial fetch, watcher setup, and cleanup on project change
+  // Initial load + project change
   useEffect(() => {
     setIsGitRepo(null)
     setStatus(null)
     void refresh()
-    void window.sizzle.gitWatch(projectPath)
-    const unsub = window.sizzle.onGitChanged((changedPath) => {
-      if (changedPath === projectPath) void refresh()
-    })
-    return () => {
-      unsub()
-      void window.sizzle.gitUnwatch(projectPath)
-    }
   }, [projectPath, refresh])
+
+  // Polling
+  useEffect(() => {
+    const id = window.setInterval(() => void refresh(), POLL_INTERVAL_MS)
+    return () => window.clearInterval(id)
+  }, [refresh])
 
   if (isGitRepo === false) return null
   if (isGitRepo === null) return null  // still loading — don't flash
