@@ -336,19 +336,24 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
               <FileExplorerPane projectPath={projectPath} />
             )}
             {activeTopTab === GITHUB_TAB_ID && githubUrl && (
-              <div style={{ display: 'flex', flex: 1, minHeight: 0, flexDirection: 'column', gap: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-secondary)', fontSize: 12 }}>
-                  <span>GitHub repository</span>
-                  <a href={githubUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>
-                    Open in browser
-                  </a>
-                </div>
-                <webview
-                  src={githubUrl}
-                  allowpopups="true"
-                  title="GitHub repository"
-                  style={{ flex: 1, minHeight: 0, width: '100%', border: '1px solid var(--border)', borderRadius: 8, background: '#fff' }}
-                />
+              <div style={{ display: 'flex', flex: 1, minHeight: 0, alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
+                <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>GitHub repository</div>
+                <a
+                  href={githubUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    padding: '8px 16px',
+                    background: 'var(--bg-hover)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 6,
+                    color: 'var(--accent)',
+                    fontSize: 13,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Open in browser ↗
+                </a>
               </div>
             )}
             {activeTopTab !== 'explorer' && activeTopTab !== GITHUB_TAB_ID && activeMarkdown === null && (

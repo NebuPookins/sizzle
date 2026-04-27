@@ -3,6 +3,8 @@ import { Project, useAppStore } from '../../store/appStore'
 import type { ProjectMarker } from '../../../preload'
 import ProjectItem from './ProjectItem'
 import ScanSettingsDialog from './ScanSettingsDialog'
+import MoveRenameDialog from './MoveRenameDialog'
+import MoveRenameSummaryDialog from './MoveRenameSummaryDialog'
 
 interface Props {
   onRefreshProjects(): Promise<void>
@@ -26,6 +28,8 @@ export default function LeftPane({ onRefreshProjects }: Props) {
   const [search, setSearch] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [moveRenameProject, setMoveRenameProject] = useState<Project | null>(null)
+  const [moveRenameSummary, setMoveRenameSummary] = useState<{ changes: string[]; error?: string } | null>(null)
   const allProjects = sortedProjects()
   const projects = search
     ? allProjects.filter(p => {
@@ -47,6 +51,17 @@ export default function LeftPane({ onRefreshProjects }: Props) {
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [contextMenu])
+
+  const handleMoveRenameConfirm = async (newPath: string) => {
+    if (!moveRenameProject) return
+    const oldPath = moveRenameProject.path
+    setMoveRenameProject(null)
+    const result = await window.sizzle.moveRenameProject(oldPath, newPath)
+    setMoveRenameSummary({ changes: result.changes, error: result.error })
+    if (result.success) {
+      await onRefreshProjects()
+    }
+  }
 
   const addProjectToIgnoreRoots = async () => {
     if (!contextMenu) return
@@ -197,6 +212,24 @@ export default function LeftPane({ onRefreshProjects }: Props) {
           }}
         >
           <button
+            onClick={() => {
+              setMoveRenameProject(contextMenu.project)
+              setContextMenu(null)
+            }}
+            style={{
+              width: '100%',
+              textAlign: 'left',
+              padding: '8px 10px',
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              borderRadius: 4,
+            }}
+          >
+            Move/Rename project
+          </button>
+          <button
             onClick={addProjectToIgnoreRoots}
             style={{
               width: '100%',
@@ -219,6 +252,22 @@ export default function LeftPane({ onRefreshProjects }: Props) {
         onClose={() => setShowSettings(false)}
         onSaved={onRefreshProjects}
       />
+
+      {moveRenameProject && (
+        <MoveRenameDialog
+          projectPath={moveRenameProject.path}
+          onClose={() => setMoveRenameProject(null)}
+          onConfirm={handleMoveRenameConfirm}
+        />
+      )}
+
+      {moveRenameSummary && (
+        <MoveRenameSummaryDialog
+          changes={moveRenameSummary.changes}
+          error={moveRenameSummary.error}
+          onClose={() => setMoveRenameSummary(null)}
+        />
+      )}
     </div>
   )
 }

@@ -222,6 +222,15 @@ export function getScanSettings(): ScanSettings {
   return normalized
 }
 
+export function renameProjectMetadata(oldPath: string, newPath: string): void {
+  const db = readDB()
+  if (db.projects[oldPath]) {
+    db.projects[newPath] = db.projects[oldPath]
+    delete db.projects[oldPath]
+    writeDB(db)
+  }
+}
+
 export function setScanSettings(settings: ScanSettings): ScanSettings {
   const db = readDB()
   const normalized: ScanSettings = {

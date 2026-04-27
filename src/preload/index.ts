@@ -78,6 +78,12 @@ export interface GitStatus {
   isDetached: boolean
 }
 
+export interface MoveRenameResult {
+  success: boolean
+  error?: string
+  changes: string[]
+}
+
 export interface PtyOpenResult {
   replay: string
   exitCode: number | null
@@ -181,6 +187,9 @@ const api = {
 
   setWindowTitle: (projectName: string | null): void =>
     ipcRenderer.send('window:setTitle', projectName),
+
+  moveRenameProject: (oldPath: string, newPath: string): Promise<MoveRenameResult> =>
+    ipcRenderer.invoke('project:moveRename', oldPath, newPath),
 }
 
 contextBridge.exposeInMainWorld('sizzle', api)

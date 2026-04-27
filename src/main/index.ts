@@ -5,6 +5,7 @@ import { registerPtyHandlers } from './ipc/pty'
 import { registerMetadataHandlers } from './ipc/metadata'
 import { registerClaudeHandlers } from './ipc/claude'
 import { registerAppReloadHandlers } from './ipc/appReload'
+import { registerProjectHandlers } from './ipc/project'
 import { getQuitMode, signalReloadReady } from './appReload'
 import { ptyHostClient } from './pty/client'
 
@@ -38,11 +39,15 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      webviewTag: true,
     },
   })
 
   configureExternalLinks(mainWindow.webContents)
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12') {
+      mainWindow?.webContents.toggleDevTools()
+    }
+  })
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
     console.error('Renderer failed to load', { errorCode, errorDescription, validatedURL })
   })
@@ -70,6 +75,7 @@ app.whenReady().then(() => {
   registerMetadataHandlers()
   registerClaudeHandlers()
   registerAppReloadHandlers(() => mainWindow)
+  registerProjectHandlers()
 
   ipcMain.on('window:setTitle', (_event, projectName: string | null) => {
     if (!mainWindow) return

@@ -15,16 +15,6 @@ import type {
 import type { ReloadSnapshot } from '../shared/reload'
 
 declare global {
-  namespace JSX {
-    interface IntrinsicElements {
-      webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
-        allowpopups?: string
-        partition?: string
-        src?: string
-      }
-    }
-  }
-
   interface Window {
     sizzle: {
       defaultShell: string
