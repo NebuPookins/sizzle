@@ -410,7 +410,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   sortedProjects() {
-    return [...get().projects].sort((a, b) => {
+    const { projects, launchedProjects } = get()
+    return [...projects].sort((a, b) => {
+      const activeDiff = (launchedProjects.has(a.path) ? 0 : 1) - (launchedProjects.has(b.path) ? 0 : 1)
+      if (activeDiff !== 0) return activeDiff
+
       const markerDiff = markerRank(a.marker) - markerRank(b.marker)
       if (markerDiff !== 0) return markerDiff
 
