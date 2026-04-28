@@ -24,6 +24,8 @@ export default function LeftPane({ onRefreshProjects }: Props) {
     setProjectMarker,
     createReloadSnapshot,
     setReloadMessage,
+    autoSwitchMode,
+    setAutoSwitchMode,
   } = useAppStore()
   const [search, setSearch] = useState('')
   const [showSettings, setShowSettings] = useState(false)
@@ -164,6 +166,21 @@ export default function LeftPane({ onRefreshProjects }: Props) {
       </div>
 
       <div style={{ padding: '8px', borderTop: '1px solid var(--border)', display: 'grid', gap: 8 }}>
+        <label style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 11,
+          color: 'var(--text-muted)',
+          cursor: 'pointer',
+        }}>
+          <input
+            type="checkbox"
+            checked={autoSwitchMode}
+            onChange={e => setAutoSwitchMode(e.target.checked)}
+          />
+          Auto-switch to idle projects
+        </label>
         <button
           onClick={handleReloadCore}
           style={{

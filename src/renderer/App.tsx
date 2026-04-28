@@ -12,8 +12,14 @@ function sortTags(tags: ProjectTag[]): ProjectTag[] {
 }
 
 export default function App() {
-  const { setProjects, hydrateReloadSnapshot, reloadMessage, setReloadMessage, selectedProject } = useAppStore()
+  const { setProjects, hydrateReloadSnapshot, reloadMessage, setReloadMessage, selectedProject, claudeStatus, shellStatus, autoSwitchMode } = useAppStore()
   const isLoadingProjectsRef = useRef(false)
+  const prevClaudeRef = useRef<Record<string, string>>({})
+  const prevShellRef = useRef<Record<string, string>>({})
+  const lastInteractionRef = useRef(0)
+  const autoSwitchEnabledRef = useRef(false)
+
+  autoSwitchEnabledRef.current = autoSwitchMode
 
   const loadProjects = useCallback(async () => {
     if (isLoadingProjectsRef.current) return
@@ -83,6 +89,80 @@ export default function App() {
     const timer = window.setTimeout(() => setReloadMessage(null), 4000)
     return () => window.clearTimeout(timer)
   }, [reloadMessage, setReloadMessage])
+
+  // Track user interaction to debounce auto-switch; on Enter, switch to an idle project
+  useEffect(() => {
+    const onInteraction = () => { lastInteractionRef.current = Date.now() }
+
+    const onEnter = (e: KeyboardEvent) => {
+      lastInteractionRef.current = Date.now()
+      if (e.key !== 'Enter' || !autoSwitchEnabledRef.current) return
+
+      const state = useAppStore.getState()
+      const currentPath = state.selectedProject?.path
+      if (!currentPath) return
+
+      for (const project of state.projects) {
+        if (project.path === currentPath) continue
+        if (!state.launchedProjects.has(project.path)) continue
+
+        const isBusy = state.claudeStatus[project.path] === 'working' || state.shellStatus[project.path] === 'working'
+        if (isBusy) continue
+
+        state.selectProject(project)
+        return
+      }
+    }
+
+    window.addEventListener('keydown', onEnter)
+    window.addEventListener('mousedown', onInteraction)
+    return () => {
+      window.removeEventListener('keydown', onEnter)
+      window.removeEventListener('mousedown', onInteraction)
+    }
+  }, [])
+
+  // Watch for projects transitioning from busy to idle and auto-switch
+  useEffect(() => {
+    if (!autoSwitchEnabledRef.current) {
+      prevClaudeRef.current = {}
+      prevShellRef.current = {}
+      return
+    }
+
+    const { projects, selectProject } = useAppStore.getState()
+
+    for (const projectPath of Object.keys(claudeStatus)) {
+      const isSelected = projectPath === selectedProject?.path
+      if (isSelected) continue
+
+      const prevC = prevClaudeRef.current[projectPath]
+      const prevS = prevShellRef.current[projectPath]
+      const currC = claudeStatus[projectPath]
+      const currS = shellStatus[projectPath]
+
+      // Detect transition from busy (any working) to fully idle (all waiting)
+      const wasBusy = projectPath in prevClaudeRef.current && (prevC === 'working' || prevS === 'working')
+      const nowIdle = currC === 'waiting' && currS === 'waiting'
+
+      if (wasBusy && nowIdle) {
+        const selectedClaude = selectedProject?.path ? claudeStatus[selectedProject.path] : undefined
+        const selectedShell = selectedProject?.path ? shellStatus[selectedProject.path] : undefined
+        const selectedBusy = selectedClaude === 'working' || selectedShell === 'working'
+
+        if (selectedBusy && Date.now() - lastInteractionRef.current > 5000) {
+          const project = projects.find(p => p.path === projectPath)
+          if (project) {
+            selectProject(project)
+            break
+          }
+        }
+      }
+    }
+
+    prevClaudeRef.current = claudeStatus
+    prevShellRef.current = shellStatus
+  }, [claudeStatus, shellStatus, selectedProject, autoSwitchMode])
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>

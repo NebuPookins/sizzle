@@ -35,6 +35,7 @@ interface AppState {
   claudeStatus: Record<string, ClaudeStatus>
   shellStatus: Record<string, ShellStatus>
   reloadMessage: string | null
+  autoSwitchMode: boolean
 
   setProjects(projects: Project[]): void
   selectProject(project: Project): void
@@ -55,6 +56,7 @@ interface AppState {
   hydrateReloadSnapshot(snapshot: ReloadSnapshot): void
   createReloadSnapshot(): ReloadSnapshot
   setReloadMessage(message: string | null): void
+  setAutoSwitchMode(autoSwitchMode: boolean): void
   sortedProjects(): Project[]
 }
 
@@ -113,6 +115,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   claudeStatus: {},
   shellStatus: {},
   reloadMessage: null,
+  autoSwitchMode: false,
 
   setProjects(projects) {
     set((state) => {
@@ -407,6 +410,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setReloadMessage(message) {
     set({ reloadMessage: message })
+  },
+
+  setAutoSwitchMode(autoSwitchMode) {
+    set({ autoSwitchMode })
   },
 
   sortedProjects() {
