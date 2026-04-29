@@ -34,15 +34,12 @@ export default function MainPane() {
         </div>
       )}
 
-      {/* All terminal views: mounted and kept alive, hidden when not active */}
-      <div style={{
-        display: activeTerminalPath ? 'flex' : 'none',
-        flexDirection: 'column',
-        flex: 1,
-        minHeight: 0,
-      }}>
-        <LaunchedProjectsContainer activeProjectPath={activeTerminalPath} />
-      </div>
+      {/* Terminal view: mounted only for the active launched project */}
+      {activeTerminalPath && (
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <LaunchedProjectsContainer activeProjectPath={activeTerminalPath} />
+        </div>
+      )}
     </div>
   )
 }

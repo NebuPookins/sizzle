@@ -6,27 +6,14 @@ interface Props {
 }
 
 export default function LaunchedProjectsContainer({ activeProjectPath }: Props) {
-  const { launchedProjects, terminalStates } = useAppStore()
-  const paths = Array.from(launchedProjects)
+  const { terminalStates } = useAppStore()
+
+  if (!activeProjectPath) return null
 
   return (
-    <>
-      {paths.map((projectPath) => (
-        <div
-          key={projectPath}
-          style={{
-            display: activeProjectPath === projectPath ? 'flex' : 'none',
-            flex: 1,
-            minHeight: 0,
-            flexDirection: 'column',
-          }}
-        >
-          <TerminalView
-            projectPath={projectPath}
-            launchTarget={terminalStates[projectPath]?.launchTarget ?? 'claude'}
-          />
-        </div>
-      ))}
-    </>
+    <TerminalView
+      projectPath={activeProjectPath}
+      launchTarget={terminalStates[activeProjectPath]?.launchTarget ?? 'claude'}
+    />
   )
 }
