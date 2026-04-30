@@ -1,4 +1,5 @@
 mod commands;
+mod generated_api_manifest;
 
 use commands::metadata::MetadataStore;
 use commands::pty::PtyRegistry;
@@ -36,6 +37,7 @@ pub fn run() {
         .manage(metadata_store)
         .manage(Mutex::new(pty_registry))
         .invoke_handler(tauri::generate_handler![
+            commands::get_api_manifest,
             commands::scan_projects,
             commands::rescan_project_tags,
             commands::get_scan_settings,

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { ApiManifest } from '../shared/api-manifest'
 
 export interface ProjectTag {
   name: string
@@ -136,7 +137,7 @@ export const setLastLaunched = (projectPath: string): Promise<void> =>
   invoke('set_last_launched', { projectPath })
 
 export const setTagOverride = (projectPath: string, override: ProjectTagOverride | null): Promise<ProjectMeta> =>
-  invoke('set_tag_override', { projectPath, override })
+  invoke('set_tag_override', { projectPath, overrideVal: override })
 
 export const setProjectMarker = (projectPath: string, marker: ProjectMarker): Promise<ProjectMeta> =>
   invoke('set_project_marker', { projectPath, marker })
@@ -209,6 +210,10 @@ export const reloadCore = async (_snapshot: ReloadSnapshot): Promise<void> => {
   // For now, this is a no-op — the user can relaunch the app.
   throw new Error('Core reload not supported in Tauri build. Relaunch the app instead.')
 }
+
+// API manifest (sync detection)
+export const getApiManifest = (): Promise<ApiManifest> =>
+  invoke('get_api_manifest')
 
 // Window title
 import { getCurrentWindow } from '@tauri-apps/api/window'

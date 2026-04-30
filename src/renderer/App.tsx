@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore, Project } from './store/appStore'
 import LeftPane from './components/LeftPane/LeftPane'
 import MainPane from './components/MainPane/MainPane'
 import GitStatusPane from './components/GitStatusPane/GitStatusPane'
 import type { ProjectTag } from './api'
-import { scanProjects, getAllMetadata, consumeReloadSnapshot, setWindowTitle, ptyListSessions } from './api'
+import { scanProjects, getAllMetadata, consumeReloadSnapshot, setWindowTitle, ptyListSessions, getApiManifest } from './api'
 import type { LaunchTarget, ReloadSnapshot } from '../shared/reload'
+import { API_MANIFEST } from 'virtual:api-manifest'
+import { diffManifests, type ManifestDiff } from './diffManifests'
+import ApiMismatchBanner from './ApiMismatchBanner'
 
 const PROJECT_REFRESH_INTERVAL_MS = 10_000
 
@@ -145,6 +148,9 @@ export default function App() {
 
   autoSwitchEnabledRef.current = autoSwitchMode
 
+  const [apiDiff, setApiDiff] = useState<ManifestDiff | null>(null)
+  const [apiDiffDismissed, setApiDiffDismissed] = useState(false)
+
   const loadProjects = useCallback(async () => {
     if (isLoadingProjectsRef.current) return
     isLoadingProjectsRef.current = true
@@ -181,6 +187,23 @@ export default function App() {
       }
       void loadProjects()
     })
+
+    // Check API sync
+    getApiManifest()
+      .then((backend) => {
+        const d = diffManifests(API_MANIFEST, backend)
+        if (d.missing.length > 0 || d.changed.length > 0) {
+          setApiDiff(d)
+        }
+      })
+      .catch(() => {
+        // Can't reach backend at all — treat as mismatch
+        setApiDiff({
+          missing: [{ name: '(backend unreachable)', kind: 'missing', frontendArgs: [] }],
+          extra: [],
+          changed: [],
+        })
+      })
   }, [hydrateReloadSnapshot, loadProjects])
 
   useEffect(() => {
@@ -292,7 +315,10 @@ export default function App() {
   }, [claudeStatus, shellStatus, selectedProject, autoSwitchMode])
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {apiDiff && !apiDiffDismissed && (
+        <ApiMismatchBanner diff={apiDiff} onDismiss={() => setApiDiffDismissed(true)} />
+      )}
       {reloadMessage && (
         <div style={{
           position: 'fixed',
@@ -311,9 +337,11 @@ export default function App() {
           {reloadMessage}
         </div>
       )}
-      <LeftPane onRefreshProjects={loadProjects} />
-      <MainPane />
-      {selectedProject && <GitStatusPane projectPath={selectedProject.path} />}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        <LeftPane onRefreshProjects={loadProjects} />
+        <MainPane />
+        {selectedProject && <GitStatusPane projectPath={selectedProject.path} />}
+      </div>
     </div>
   )
 }

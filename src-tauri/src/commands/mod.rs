@@ -1,3 +1,4 @@
+pub mod api_manifest;
 pub mod claude;
 pub mod files;
 pub mod git;
@@ -7,6 +8,7 @@ pub mod scanner;
 pub mod pty;
 
 // Re-export all Tauri command functions
+pub use api_manifest::*;
 pub use claude::*;
 pub use files::*;
 pub use git::*;
