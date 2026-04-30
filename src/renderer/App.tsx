@@ -4,9 +4,132 @@ import LeftPane from './components/LeftPane/LeftPane'
 import MainPane from './components/MainPane/MainPane'
 import GitStatusPane from './components/GitStatusPane/GitStatusPane'
 import type { ProjectTag } from './api'
-import { scanProjects, getAllMetadata, consumeReloadSnapshot, setWindowTitle } from './api'
+import { scanProjects, getAllMetadata, consumeReloadSnapshot, setWindowTitle, ptyListSessions } from './api'
+import type { LaunchTarget, ReloadSnapshot } from '../shared/reload'
 
 const PROJECT_REFRESH_INTERVAL_MS = 10_000
+
+interface ParsedAgentId {
+  type: 'agent'
+  projectPath: string
+  sessionNumber: number
+  launchTarget: LaunchTarget
+}
+
+interface ParsedShellId {
+  type: 'shell'
+  projectPath: string
+  sessionNumber: number
+}
+
+type ParsedPtyId = ParsedAgentId | ParsedShellId
+
+function parsePtyId(id: string): ParsedPtyId | null {
+  // Format for agent:  <launchTarget>-<projectPath>-<sessionNumber>
+  // Format for shell:  shell-<projectPath>-<sessionNumber>
+  // The session number is always the last `-<digits>` segment.
+  const lastDash = id.lastIndexOf('-')
+  if (lastDash === -1) return null
+
+  const sessionStr = id.slice(lastDash + 1)
+  const sessionNumber = parseInt(sessionStr, 10)
+  if (isNaN(sessionNumber)) return null
+
+  const prefix = id.slice(0, lastDash)
+
+  if (prefix.startsWith('shell-')) {
+    return { type: 'shell', projectPath: prefix.slice(6), sessionNumber }
+  }
+
+  // Agent session: first `-` separates launch target from absolute path
+  const firstDash = prefix.indexOf('-')
+  if (firstDash === -1) return null
+
+  const launchTarget = prefix.slice(0, firstDash) as LaunchTarget
+  if (launchTarget !== 'claude' && launchTarget !== 'codex' && launchTarget !== 'shell') return null
+
+  return {
+    type: 'agent',
+    projectPath: prefix.slice(firstDash + 1),
+    sessionNumber,
+    launchTarget,
+  }
+}
+
+async function restoreBackendSessions(): Promise<void> {
+  const activeIds = await ptyListSessions()
+  if (activeIds.length === 0) return
+
+  const store = useAppStore.getState()
+
+  // Group sessions by project path
+  const projectsMap = new Map<string, {
+    launchTarget: LaunchTarget
+    agentSession: number
+    shellTabs: number[]
+  }>()
+
+  for (const id of activeIds) {
+    const parsed = parsePtyId(id)
+    if (!parsed) continue
+
+    if (parsed.type === 'agent') {
+      const entry = projectsMap.get(parsed.projectPath)
+      if (entry) {
+        entry.launchTarget = parsed.launchTarget
+        entry.agentSession = Math.max(entry.agentSession, parsed.sessionNumber)
+      } else {
+        projectsMap.set(parsed.projectPath, {
+          launchTarget: parsed.launchTarget,
+          agentSession: parsed.sessionNumber,
+          shellTabs: [],
+        })
+      }
+    } else {
+      const entry = projectsMap.get(parsed.projectPath)
+      if (entry) {
+        entry.shellTabs.push(parsed.sessionNumber)
+      } else {
+        // Only shell sessions exist → this is a shell-only project
+        projectsMap.set(parsed.projectPath, {
+          launchTarget: 'shell',
+          agentSession: 0,
+          shellTabs: [parsed.sessionNumber],
+        })
+      }
+    }
+  }
+
+  const terminals: ReloadSnapshot['terminals'] = []
+  let selectedProjectPath: string | null = null
+
+  for (const [projectPath, info] of projectsMap) {
+    const shellTabs = info.shellTabs.sort((a, b) => a - b)
+    const maxShell = shellTabs.length > 0 ? shellTabs[shellTabs.length - 1] : -1
+
+    terminals.push({
+      projectPath,
+      launchTarget: info.launchTarget,
+      agentSession: info.agentSession,
+      shellSession: shellTabs[0] ?? 0,
+      shellTabs: shellTabs.length > 0 ? [...shellTabs] : [0],
+      activeShellTab: shellTabs[0] ?? 0,
+      nextShellSession: maxShell + 1,
+      activeTopTab: 'terminal',
+    })
+
+    if (!selectedProjectPath) {
+      selectedProjectPath = projectPath
+    }
+  }
+
+  store.hydrateReloadSnapshot({
+    selectedProjectPath,
+    terminals,
+    timestamp: Date.now(),
+  })
+  store.setReloadMessage('Terminals reconnected.')
+}
 
 function sortTags(tags: ProjectTag[]): ProjectTag[] {
   return [...tags].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
@@ -52,6 +175,9 @@ export default function App() {
     consumeReloadSnapshot().then((snapshot) => {
       if (snapshot) {
         hydrateReloadSnapshot(snapshot)
+      } else {
+        // Tauri build: restore any active PTY sessions from the backend
+        restoreBackendSessions().catch(() => {})
       }
       void loadProjects()
     })

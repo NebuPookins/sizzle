@@ -161,6 +161,9 @@ export const ptyDetach = (id: string): Promise<void> =>
 export const ptyKill = (id: string): Promise<void> =>
   invoke('pty_kill', { id })
 
+export const ptyListSessions = (): Promise<string[]> =>
+  invoke('pty_list_sessions')
+
 // Events
 export function onPtyData(callback: (id: string, data: string) => void): Promise<UnlistenFn> {
   return listen<PtyDataPayload>('pty:data', (event) => {

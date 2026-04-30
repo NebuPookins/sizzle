@@ -60,6 +60,7 @@ pub fn run() {
             commands::pty_resize,
             commands::pty_detach,
             commands::pty_kill,
+            commands::pty_list_sessions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running sizzle");

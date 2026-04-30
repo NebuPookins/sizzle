@@ -278,6 +278,14 @@ pub fn pty_kill(
     registry.kill(&id)
 }
 
+#[tauri::command]
+pub fn pty_list_sessions(
+    state: State<'_, Mutex<PtyRegistry>>,
+) -> Vec<String> {
+    let registry = state.lock().unwrap();
+    registry.ptys.keys().cloned().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
