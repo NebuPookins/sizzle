@@ -27,7 +27,7 @@
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "tauri dev --no-watch",
     "build": "tauri build",
     "dev:renderer": "vite",
     "build:renderer": "vite build",
