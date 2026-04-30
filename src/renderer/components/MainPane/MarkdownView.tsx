@@ -4,7 +4,15 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { LaunchTarget, Project, useAppStore } from '../../store/appStore'
 import FileExplorerPane from './FileExplorerPane'
-import type { ProjectTag, ProjectTagOverride } from '../../../preload'
+import {
+  getMarkdownFiles,
+  getProjectRepositoryInfo,
+  readMarkdownFile,
+  setLastLaunched,
+  setTagOverride,
+  rescanProjectTags,
+} from '../../api'
+import type { ProjectTag, ProjectTagOverride } from '../../api'
 
 interface Props {
   project: Project
@@ -29,8 +37,8 @@ export default function MarkdownView({ project }: Props) {
     setGithubUrl(null)
 
     Promise.all([
-      window.sizzle.getMarkdownFiles(project.path),
-      window.sizzle.getProjectRepositoryInfo(project.path),
+      getMarkdownFiles(project.path),
+      getProjectRepositoryInfo(project.path),
     ]).then(([markdownFiles, repositoryInfo]) => {
       setFiles(markdownFiles)
       setGithubUrl(repositoryInfo.githubUrl)
@@ -43,7 +51,7 @@ export default function MarkdownView({ project }: Props) {
   // Poll for markdown files being added or removed in the project directory
   useEffect(() => {
     const id = window.setInterval(() => {
-      window.sizzle.getMarkdownFiles(project.path).then((newFiles) => {
+      getMarkdownFiles(project.path).then((newFiles) => {
         setFiles((prev) => {
           const same =
             prev.length === newFiles.length && prev.every((f, i) => f === newFiles[i])
@@ -67,7 +75,7 @@ export default function MarkdownView({ project }: Props) {
   useEffect(() => {
     if (!activeFile || activeFile === 'explorer' || activeFile === GITHUB_TAB_ID) return
     setContent(null)
-    window.sizzle.readMarkdownFile(activeFile).then((c) => {
+    readMarkdownFile(activeFile).then((c) => {
       setContent(c ?? '*Could not read file.*')
     })
   }, [activeFile])
@@ -79,7 +87,7 @@ export default function MarkdownView({ project }: Props) {
   }, [project.path, project.tags, project.primaryTag])
 
   async function handleLaunch(target: LaunchTarget) {
-    await window.sizzle.setLastLaunched(project.path)
+    await setLastLaunched(project.path)
     launchProject(project, target)
   }
 
@@ -102,7 +110,7 @@ export default function MarkdownView({ project }: Props) {
     const tagNames = parseTagList(tagInput)
     if (tagNames.length === 0) {
       const override: ProjectTagOverride = { tags: [], primaryTag: null }
-      const updated = await window.sizzle.setTagOverride(project.path, override)
+      const updated = await setTagOverride(project.path, override)
       setProjectTagOverride(project.path, updated.tagOverride)
       setIsEditingTags(false)
       return
@@ -123,15 +131,15 @@ export default function MarkdownView({ project }: Props) {
       tags,
       primaryTag: tagNames.includes(chosenPrimary) ? chosenPrimary : (tagNames[0] ?? null),
     }
-    const updated = await window.sizzle.setTagOverride(project.path, override)
+    const updated = await setTagOverride(project.path, override)
     setProjectTagOverride(project.path, updated.tagOverride)
     setIsEditingTags(false)
   }
 
   async function clearTagOverride() {
     const [updated, freshTags] = await Promise.all([
-      window.sizzle.setTagOverride(project.path, null),
-      window.sizzle.rescanProjectTags(project.path),
+      setTagOverride(project.path, null),
+      rescanProjectTags(project.path),
     ])
     setProjectDetectedTags(project.path, freshTags)
     setProjectTagOverride(project.path, updated.tagOverride)

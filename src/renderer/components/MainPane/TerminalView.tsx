@@ -7,6 +7,7 @@ import type { LaunchTarget } from '../../store/appStore'
 import { getAgent } from '../../agents'
 import XtermPane, { type XtermPaneHandle } from './XtermPane'
 import FileExplorerPane from './FileExplorerPane'
+import { defaultShell, getMarkdownFiles, readMarkdownFile, getProjectRepositoryInfo, ptyKill } from '../../api'
 
 interface Props {
   projectPath: string
@@ -42,7 +43,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const activeShellTab = terminalState?.activeShellTab ?? shellTabs[0]
   const activeTopTab = terminalState?.activeTopTab ?? 'terminal'
   const nextShellSession = terminalState?.nextShellSession ?? 1
-  const shell = window.sizzle.defaultShell || '/bin/bash'
+  const shell = defaultShell || '/bin/bash'
   const agent = isShellOnly ? null : getAgent(launchTarget)
   const [agentArgs, setAgentArgs] = useState<string[] | null>(null)
   const shellRefs = useRef<Map<number, XtermPaneHandle>>(new Map())
@@ -94,8 +95,8 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     setGithubUrl(null)
 
     Promise.all([
-      window.sizzle.getMarkdownFiles(projectPath),
-      window.sizzle.getProjectRepositoryInfo(projectPath),
+      getMarkdownFiles(projectPath),
+      getProjectRepositoryInfo(projectPath),
     ]).then(([files, repositoryInfo]) => {
       if (!isMounted) return
       setMarkdownFiles(files)
@@ -107,10 +108,10 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     }
   }, [projectPath])
 
-  // Poll for markdown files being added or removed in the project directory
+  // Poll for markdown files being added or removed
   useEffect(() => {
     const id = window.setInterval(() => {
-      window.sizzle.getMarkdownFiles(projectPath).then((newFiles) => {
+      getMarkdownFiles(projectPath).then((newFiles) => {
         setMarkdownFiles((prev) => {
           const same =
             prev.length === newFiles.length && prev.every((f, i) => f === newFiles[i])
@@ -134,7 +135,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     let isMounted = true
     const selectedFile = activeTopTab
     setActiveMarkdown(null)
-    window.sizzle.readMarkdownFile(selectedFile).then((content) => {
+    readMarkdownFile(selectedFile).then((content) => {
       if (!isMounted) return
       setActiveMarkdown(content ?? '*Could not read file.*')
     })
@@ -251,9 +252,9 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           <div style={{ flex: 1 }} />
           <button
               onClick={() => {
-                window.sizzle.ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
+                ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
                 for (const shellSession of shellTabs) {
-                  window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+                  ptyKill(`shell-${projectPath}-${shellSession}`)
                 }
                 unlaunchProject(projectPath)
               }}
@@ -426,7 +427,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                 {shellTabs.length > 1 && (
                   <button
                     onClick={() => {
-                      window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+                      ptyKill(`shell-${projectPath}-${shellSession}`)
                       const focusSession = shellSession === activeShellTab
                         ? shellTabs[Math.max(0, shellTabs.indexOf(shellSession) - 1)] ?? shellTabs[0]
                         : activeShellTab
@@ -477,7 +478,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           <button
             onClick={() => {
               for (const shellSession of shellTabs) {
-                window.sizzle.ptyKill(`shell-${projectPath}-${shellSession}`)
+                ptyKill(`shell-${projectPath}-${shellSession}`)
               }
               unlaunchProject(projectPath)
             }}

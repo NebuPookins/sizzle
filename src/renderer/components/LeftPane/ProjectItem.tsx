@@ -1,5 +1,5 @@
 import { Project, useAppStore } from '../../store/appStore'
-import type { ProjectMarker } from '../../../preload'
+import type { ProjectMarker } from '../../api'
 
 interface Props {
   project: Project

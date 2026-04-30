@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Project, useAppStore } from '../../store/appStore'
-import type { ProjectMarker } from '../../../preload'
+import type { ProjectMarker } from '../../api'
+import { addIgnoreRoot, setProjectMarker as persistProjectMarker, moveRenameProject, reloadCore } from '../../api'
+import type { MoveRenameResult } from '../../api'
 import ProjectItem from './ProjectItem'
 import ScanSettingsDialog from './ScanSettingsDialog'
 import MoveRenameDialog from './MoveRenameDialog'
@@ -58,7 +60,7 @@ export default function LeftPane({ onRefreshProjects }: Props) {
     if (!moveRenameProject) return
     const oldPath = moveRenameProject.path
     setMoveRenameProject(null)
-    const result = await window.sizzle.moveRenameProject(oldPath, newPath)
+    const result = await moveRenameProject(oldPath, newPath)
     setMoveRenameSummary({ changes: result.changes, error: result.error })
     if (result.success) {
       await onRefreshProjects()
@@ -67,7 +69,7 @@ export default function LeftPane({ onRefreshProjects }: Props) {
 
   const addProjectToIgnoreRoots = async () => {
     if (!contextMenu) return
-    await window.sizzle.addIgnoreRoot(contextMenu.project.path)
+    await addIgnoreRoot(contextMenu.project.path)
     await onRefreshProjects()
     setContextMenu(null)
   }
@@ -77,7 +79,7 @@ export default function LeftPane({ onRefreshProjects }: Props) {
     setProjectMarker(project.path, marker)
 
     try {
-      const persistMarker = window.sizzle.setProjectMarker
+      const persistMarker = persistProjectMarker
       if (typeof persistMarker !== 'function') {
         throw new Error('setProjectMarker bridge unavailable')
       }
@@ -93,7 +95,7 @@ export default function LeftPane({ onRefreshProjects }: Props) {
     const confirmed = window.confirm('Restart the app core and reconnect open terminals?')
     if (!confirmed) return
     try {
-      await window.sizzle.reloadCore(createReloadSnapshot())
+      await reloadCore(createReloadSnapshot())
     } catch (error) {
       console.error('Failed to reload core', error)
       setReloadMessage('Core reload failed. The current app is still running.')

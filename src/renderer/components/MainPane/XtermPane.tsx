@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { ptyCreate, ptyWrite, ptyResize, ptyDetach, onPtyData, onPtyExit, type UnlistenFn } from '../../api'
 
 interface Props {
   id: string
@@ -92,7 +93,8 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
     // Status tracking for Claude pane
     let statusTimer: ReturnType<typeof setTimeout> | null = null
     let currentStatus: 'working' | 'waiting' = 'waiting'
-    const unsubData = window.sizzle.onPtyData((ptyId, data) => {
+
+    const ptyDataUnsub = onPtyData((ptyId, data) => {
       if (ptyId !== id) return
       term.write(data)
 
@@ -109,17 +111,17 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
       }
     })
 
-    const unsubExit = window.sizzle.onPtyExit((ptyId) => {
+    const ptyExitUnsub = onPtyExit((ptyId) => {
       if (ptyId !== id) return
       onExitRef.current?.()
     })
 
     // Send keyboard input to PTY
     const disposeOnData = term.onData((data) => {
-      window.sizzle.ptyWrite(id, data)
+      ptyWrite(id, data)
     })
 
-    // Resize observer — debounced to avoid flooding IPC during window drag
+    // Resize observer — debounced
     let resizeTimer: ReturnType<typeof setTimeout> | null = null
     const observer = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer)
@@ -128,7 +130,7 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
         try {
           fitRef.current.fit()
           const { cols, rows } = termRef.current
-          window.sizzle.ptyResize(id, cols, rows)
+          ptyResize(id, cols, rows)
         } catch {}
       }, 100)
     })
@@ -136,7 +138,7 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
 
     requestAnimationFrame(() => {
       fitAddon.fit()
-      window.sizzle.ptyCreate(id, cwd, command, args).then(({ replay, exitCode }) => {
+      ptyCreate(id, cwd, command, args).then(({ replay, exitCode }) => {
         if (termRef.current !== term) return
         if (replay) term.write(replay)
         if (exitCode !== null) {
@@ -144,10 +146,9 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
           return
         }
         const { cols, rows } = term
-        window.sizzle.ptyResize(id, cols, rows)
+        ptyResize(id, cols, rows)
         if (!initialCommand || replay) return
-        // Write after spawn so the shell runs the requested command immediately.
-        window.sizzle.ptyWrite(id, `${initialCommand}\r`)
+        ptyWrite(id, `${initialCommand}\r`)
       })
     })
 
@@ -156,11 +157,11 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
       if (resizeTimer) clearTimeout(resizeTimer)
       textarea?.removeEventListener('focus', handleFocus)
       textarea?.removeEventListener('blur', handleBlur)
-      unsubData()
-      unsubExit()
+      ptyDataUnsub.then((fn) => fn())
+      ptyExitUnsub.then((fn) => fn())
       disposeOnData.dispose()
       observer.disconnect()
-      window.sizzle.ptyDetach(id)
+      ptyDetach(id)
       term.dispose()
       termRef.current = null
       fitRef.current = null

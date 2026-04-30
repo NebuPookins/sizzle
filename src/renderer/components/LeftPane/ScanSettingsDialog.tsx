@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { ScanSettings } from '../../../preload/index'
+import { open } from '@tauri-apps/plugin-dialog'
+import { getScanSettings, setScanSettings } from '../../api'
+import type { ScanSettings } from '../../api'
 
 interface Props {
   isOpen: boolean
@@ -28,7 +30,7 @@ export default function ScanSettingsDialog({ isOpen, onClose, onSaved }: Props) 
   useEffect(() => {
     if (!isOpen) return
     setLoading(true)
-    window.sizzle.getScanSettings()
+    getScanSettings()
       .then((settings: ScanSettings) => {
         setScanRoots(settings.scanRoots)
         setIgnoreRoots(settings.ignoreRoots)
@@ -61,7 +63,7 @@ export default function ScanSettingsDialog({ isOpen, onClose, onSaved }: Props) 
   }
 
   const browseFor = async (target: 'scan' | 'ignore' | 'manual') => {
-    const picked = await window.sizzle.pickDirectory()
+    const picked = await open({ directory: true, multiple: false })
     if (!picked) return
     if (target === 'scan') {
       setNewScanRoot(picked)
@@ -77,7 +79,7 @@ export default function ScanSettingsDialog({ isOpen, onClose, onSaved }: Props) 
   const save = async () => {
     setSaving(true)
     try {
-      await window.sizzle.setScanSettings({ scanRoots, ignoreRoots, manualProjectRoots })
+      await setScanSettings({ scanRoots, ignoreRoots, manualProjectRoots })
       await onSaved()
       onClose()
     } finally {

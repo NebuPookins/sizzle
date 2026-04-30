@@ -1,29 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
-
-interface FileSystemEntry {
-  name: string
-  path: string
-  isDirectory: boolean
-}
-
-interface ArchiveTreeNode {
-  name: string
-  path: string
-  isDirectory: boolean
-  children?: ArchiveTreeNode[]
-}
-
-type FilePreviewKind = 'text' | 'media' | 'archive' | 'unsupported' | 'tooLarge' | 'error'
-
-interface FilePreview {
-  kind: FilePreviewKind
-  content?: string
-  mimeType?: string
-  size?: number
-  message?: string
-  archiveTree?: ArchiveTreeNode[]
-}
+import { listDirectory, previewFile } from '../../api'
+import type { FileSystemEntry, ArchiveTreeNode, FilePreview } from '../../api'
 
 interface Props {
   projectPath: string
@@ -95,7 +73,7 @@ export default function FileExplorerPane({ projectPath }: Props) {
   useEffect(() => {
     if (!expanded[projectPath] || childrenByPath[projectPath] || loadingByPath[projectPath]) return
     setLoadingByPath((value) => ({ ...value, [projectPath]: true }))
-    window.sizzle.listDirectory(projectPath, projectPath).then((entries) => {
+    listDirectory(projectPath, projectPath).then((entries) => {
       setChildrenByPath((value) => ({ ...value, [projectPath]: entries }))
       setLoadingByPath((value) => ({ ...value, [projectPath]: false }))
     })
@@ -105,7 +83,7 @@ export default function FileExplorerPane({ projectPath }: Props) {
     if (!selectedFile) return
     setLoadingPreview(true)
     setPreview(null)
-    window.sizzle.previewFile(projectPath, selectedFile).then((result) => {
+    previewFile(projectPath, selectedFile).then((result) => {
       setPreview(result)
       setLoadingPreview(false)
     })
@@ -124,7 +102,7 @@ export default function FileExplorerPane({ projectPath }: Props) {
     setExpanded((value) => ({ ...value, [directoryPath]: true }))
     if (!childrenByPath[directoryPath] && !loadingByPath[directoryPath]) {
       setLoadingByPath((value) => ({ ...value, [directoryPath]: true }))
-      window.sizzle.listDirectory(projectPath, directoryPath).then((entries) => {
+      listDirectory(projectPath, directoryPath).then((entries) => {
         setChildrenByPath((value) => ({ ...value, [directoryPath]: entries }))
         setLoadingByPath((value) => ({ ...value, [directoryPath]: false }))
       })

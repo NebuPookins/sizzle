@@ -18,15 +18,15 @@ npm run dev
 
 Notes:
 
-- `node-pty` is a native dependency and is rebuilt during `npm install`.
-- If Electron is missing after install, run `node node_modules/electron/install.js`.
-- On Linux, `npm run dev` requires `DISPLAY` to be set.
+- The **Rust toolchain** must be installed (via [rustup](https://rustup.rs/)) to compile the Tauri backend.
+- Platform Tauri prerequisites are required (system libs on Linux, Xcode on macOS, WebView2 on Windows). See the [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/).
 
 ## Project notes
 
-- Main process entry: `src/main/index.ts`
-- Preload entry: `src/preload/index.ts`
+- Backend entry: `src-tauri/src/lib.rs`
 - Renderer entry: `src/renderer/main.tsx`
+- Front-end API bridge: `src/renderer/api.ts`
+- Tauri commands live under: `src-tauri/src/commands/`
 - Local metadata is stored under `~/.config/sizzle` by default.
 
 This repo also includes agent-assistance files such as `AGENTS.md` and `CLAUDE.md`. They are repository guidance files, not a requirement for contributing.

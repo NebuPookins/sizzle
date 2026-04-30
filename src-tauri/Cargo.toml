@@ -1,0 +1,29 @@
+[package]
+name = "sizzle"
+version = "0.1.0"
+description = "IDE-style desktop app for browsing local projects and launching AI coding agents"
+authors = ["Nebu Pookins <nebupookins@gmail.com>"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+
+[lib]
+name = "sizzle_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "sync", "macros"] }
+portable-pty = "0.8"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+zip = "2"
+base64 = "0.22"
+log = "0.4"
+env_logger = "0.11"

@@ -25,22 +25,22 @@ Sizzle is open source and usable now, but it is still early-stage and developer-
 - Displays README and other markdown/text files in-app so you can recover context quickly.
 - Opens project-rooted terminal sessions for an AI agent and shell workflow.
 - Lets you keep multiple projects active while switching between them.
-- Supports relaunching the app core while preserving terminal state.
 - Stores scan settings and project metadata in a local config directory.
 
 ## Requirements
 
-- Node.js
-- npm
-- A working desktop environment for Electron
+- **Rust toolchain** — needed to compile the Tauri backend (install via [rustup](https://rustup.rs/))
+- **Node.js** and **npm** — for the frontend build
+- A working desktop environment (X11/Wayland on Linux, native on macOS/Windows)
 - A supported shell on your system
 - `claude` and/or `codex` installed on your `PATH` if you want to launch those agents from inside the app
 
-Notes:
+Platform-specific Tauri prerequisites (system libraries, WebView2, etc.):
+- Linux: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev`
+- macOS: included with Xcode
+- Windows: included with WebView2 (pre-installed on Windows 10 1803+)
 
-- `node-pty` is a native dependency and is rebuilt during `npm install`.
-- If Electron is missing after install, run `node node_modules/electron/install.js`.
-- On Linux, `npm run dev` needs `DISPLAY` set so Electron can open a window.
+See the [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/) for details.
 
 ## Install
 
@@ -50,21 +50,19 @@ cd sizzle
 npm install
 ```
 
-The `postinstall` script rebuilds the native PTY dependency automatically.
-
-If the Electron binary is missing after install, run:
-
-```bash
-node node_modules/electron/install.js
-```
-
 ## Run In Development
 
 ```bash
 npm run dev
 ```
 
-On first launch, Sizzle will ask you to choose the root directory it should scan for projects.
+This starts the Vite dev server and launches the Tauri desktop window. On first launch, Sizzle will ask you to choose the root directory it should scan for projects.
+
+To run the frontend Vite server standalone (without the Tauri window):
+
+```bash
+npm run dev:renderer
+```
 
 ## Build
 
@@ -72,20 +70,7 @@ On first launch, Sizzle will ask you to choose the root directory it should scan
 npm run build
 ```
 
-This produces the Electron app bundles under `out/`.
-
-## Preview The Built App
-
-```bash
-npm run preview
-```
-
-## Support
-
-- Issues: <https://github.com/NebuPookins/sizzle/issues>
-- Repository: <https://github.com/NebuPookins/sizzle>
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Security: [SECURITY.md](SECURITY.md)
+This produces the Tauri app bundles (`.deb`, `.AppImage`, `.dmg`, `.msi`, etc.) in `src-tauri/target/release/bundle/`.
 
 ## Config Storage
 
@@ -95,19 +80,7 @@ By default, Sizzle stores its local state under:
 ~/.config/sizzle
 ```
 
-That includes scan settings, project metadata, PTY host state, and reload state.
-
-To run Sizzle against a different config directory, pass:
-
-```bash
-npm run dev -- --sizzle-config-dir=/tmp/sizzle-test
-```
-
-This is useful for testing first-run behavior without touching your normal config.
-
-## License
-
-Sizzle is licensed under the GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`). See [LICENSE](LICENSE).
+That includes scan settings and project metadata.
 
 ## First-Run Flow
 
@@ -116,3 +89,14 @@ Sizzle is licensed under the GNU Affero General Public License v3.0 or later (`A
 3. Wait for Sizzle to scan for projects.
 4. Pick a project from the sidebar.
 5. Read the README, inspect files, or launch a terminal/agent session.
+
+## License
+
+Sizzle is licensed under the GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`). See [LICENSE](LICENSE).
+
+## Support
+
+- Issues: <https://github.com/NebuPookins/sizzle/issues>
+- Repository: <https://github.com/NebuPookins/sizzle>
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security: [SECURITY.md](SECURITY.md)

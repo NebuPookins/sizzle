@@ -3,7 +3,8 @@ import { useAppStore, Project } from './store/appStore'
 import LeftPane from './components/LeftPane/LeftPane'
 import MainPane from './components/MainPane/MainPane'
 import GitStatusPane from './components/GitStatusPane/GitStatusPane'
-import type { ProjectTag } from '../preload'
+import type { ProjectTag } from './api'
+import { scanProjects, getAllMetadata, consumeReloadSnapshot, setWindowTitle } from './api'
 
 const PROJECT_REFRESH_INTERVAL_MS = 10_000
 
@@ -25,8 +26,8 @@ export default function App() {
     if (isLoadingProjectsRef.current) return
     isLoadingProjectsRef.current = true
     const [scanned, allMeta] = await Promise.all([
-      window.sizzle.scanProjects(),
-      window.sizzle.getAllMetadata(),
+      scanProjects(),
+      getAllMetadata(),
     ])
       .finally(() => {
         isLoadingProjectsRef.current = false
@@ -48,7 +49,7 @@ export default function App() {
   }, [setProjects])
 
   useEffect(() => {
-    window.sizzle.consumeReloadSnapshot().then((snapshot) => {
+    consumeReloadSnapshot().then((snapshot) => {
       if (snapshot) {
         hydrateReloadSnapshot(snapshot)
       }
@@ -81,7 +82,7 @@ export default function App() {
   }, [loadProjects])
 
   useEffect(() => {
-    window.sizzle.setWindowTitle(selectedProject?.name ?? null)
+    setWindowTitle(selectedProject?.name ?? null)
   }, [selectedProject])
 
   useEffect(() => {

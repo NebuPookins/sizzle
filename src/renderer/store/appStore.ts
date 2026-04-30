@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ProjectMarker, ProjectTag, ProjectTagOverride } from '../../preload'
+import type { ProjectMarker, ProjectTag, ProjectTagOverride } from '../api'
 import type { LaunchTarget, ReloadSnapshot } from '../../shared/reload'
 
 export interface Project {

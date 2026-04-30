@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { GitStatus, GitFileChange } from '../../../preload'
+import type { GitStatus, GitFileChange } from '../../api'
+import { getGitStatus } from '../../api'
 
 interface Props {
   projectPath: string
@@ -165,7 +166,7 @@ export default function GitStatusPane({ projectPath }: Props) {
     if (fetchingRef.current) return
     fetchingRef.current = true
     try {
-      const result = await window.sizzle.getGitStatus(projectPath)
+      const result = await getGitStatus(projectPath)
       setStatus(result)
       setIsGitRepo(result !== null)
     } finally {
