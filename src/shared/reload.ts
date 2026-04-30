@@ -4,11 +4,11 @@ export interface ProjectTerminalStateSnapshot {
   projectPath: string
   launchTarget: LaunchTarget
   agentSession: number
-  shellSession?: number
-  shellTabs?: number[]
-  activeShellTab?: number
-  nextShellSession?: number
-  activeTopTab: 'terminal' | 'explorer' | string
+  shellSession: number
+  shellTabs: number[]
+  activeShellTab: number
+  nextShellSession: number
+  activeTopTab: string
 }
 
 export interface ReloadSnapshot {

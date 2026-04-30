@@ -185,10 +185,8 @@ interface PtyExitPayload {
 }
 
 // Shell / defaults
-export const defaultShell: string =
-  (typeof process !== 'undefined' && process.env?.SHELL) ||
-  (typeof process !== 'undefined' && process.env?.COMSPEC) ||
-  '/bin/bash'
+export const getDefaultShell = (): Promise<string> =>
+  invoke<string>('get_default_shell')
 
 // Projects
 export const moveRenameProject = (oldPath: string, newPath: string): Promise<MoveRenameResult> =>

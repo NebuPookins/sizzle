@@ -1,8 +1,10 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { CanvasAddon } from '@xterm/addon-canvas'
 import '@xterm/xterm/css/xterm.css'
-import { ptyCreate, ptyWrite, ptyResize, ptyDetach, onPtyData, onPtyExit, type UnlistenFn } from '../../api'
+import { ptyCreate, ptyWrite, ptyResize, ptyDetach, ptyKill, onPtyData, onPtyExit } from '../../api'
+import type { UnlistenFn } from '@tauri-apps/api/event'
 
 interface Props {
   id: string
@@ -35,6 +37,7 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const onExitRef = useRef(onExit)
+  const [crashed, setCrashed] = useState(false)
 
   useImperativeHandle(ref, () => ({
     focus: () => termRef.current?.focus(),
@@ -79,6 +82,8 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
 
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
+    const canvasAddon = new CanvasAddon()
+    term.loadAddon(canvasAddon)
     term.open(containerRef.current)
 
     termRef.current = term
@@ -111,9 +116,13 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
       }
     })
 
-    const ptyExitUnsub = onPtyExit((ptyId) => {
+    const ptyExitUnsub = onPtyExit((ptyId, exitCode) => {
       if (ptyId !== id) return
-      onExitRef.current?.()
+      if (exitCode === -1) {
+        setCrashed(true)
+      } else {
+        onExitRef.current?.()
+      }
     })
 
     // Send keyboard input to PTY
@@ -169,16 +178,83 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, cwd, command, initialCommand])
 
+  const handleCopyOutput = () => {
+    const term = termRef.current
+    if (!term) return
+    term.selectAll()
+    const text = term.getSelection()
+    if (text) {
+      navigator.clipboard.writeText(text)
+    }
+    term.clearSelection()
+  }
+
+  const handleCloseTerminal = () => {
+    ptyKill(id)
+    onExitRef.current?.()
+  }
+
   return (
-    <div
-      ref={containerRef}
-      style={{
-        flex: 1,
-        minHeight: 0,
-        overflow: 'hidden',
-        background: '#0f0f1a',
-      }}
-    />
+    <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div
+        ref={containerRef}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'hidden',
+          background: '#0f0f1a',
+        }}
+      />
+      {crashed && (
+        <div style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 12px',
+          background: 'rgba(30, 10, 10, 0.95)',
+          borderTop: '1px solid #5a2020',
+          zIndex: 10,
+        }}>
+          <span style={{ color: '#ff6e6e', fontSize: 12, flex: 1 }}>
+            Terminal process crashed
+          </span>
+          <button
+            onClick={handleCopyOutput}
+            style={{
+              padding: '3px 10px',
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 4,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-hover)',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+            }}
+          >
+            Copy output
+          </button>
+          <button
+            onClick={handleCloseTerminal}
+            style={{
+              padding: '3px 10px',
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 4,
+              border: '1px solid #5a2020',
+              background: '#2a1010',
+              color: '#c07070',
+              cursor: 'pointer',
+            }}
+          >
+            Close
+          </button>
+        </div>
+      )}
+    </div>
   )
 })
 

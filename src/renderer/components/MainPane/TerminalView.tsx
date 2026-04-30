@@ -7,7 +7,7 @@ import type { LaunchTarget } from '../../store/appStore'
 import { getAgent } from '../../agents'
 import XtermPane, { type XtermPaneHandle } from './XtermPane'
 import FileExplorerPane from './FileExplorerPane'
-import { defaultShell, getMarkdownFiles, readMarkdownFile, getProjectRepositoryInfo, ptyKill } from '../../api'
+import { getDefaultShell, getMarkdownFiles, readMarkdownFile, getProjectRepositoryInfo, ptyKill } from '../../api'
 
 interface Props {
   projectPath: string
@@ -43,9 +43,9 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const activeShellTab = terminalState?.activeShellTab ?? shellTabs[0]
   const activeTopTab = terminalState?.activeTopTab ?? 'terminal'
   const nextShellSession = terminalState?.nextShellSession ?? 1
-  const shell = defaultShell || '/bin/bash'
-  const agent = isShellOnly ? null : getAgent(launchTarget)
+  const [shell, setShell] = useState<string | null>(null)
   const [agentArgs, setAgentArgs] = useState<string[] | null>(null)
+  const agent = isShellOnly ? null : getAgent(launchTarget)
   const shellRefs = useRef<Map<number, XtermPaneHandle>>(new Map())
   const tabName = (filePath: string) => filePath.split('/').pop() ?? filePath
   const allShellsExited = shellTabs.length > 0 && shellTabs.every((shellSession) => exitedShells.includes(shellSession))
@@ -88,6 +88,15 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       isMounted = false
     }
   }, [projectPath, launchTarget])
+
+  useEffect(() => {
+    let isMounted = true
+    getDefaultShell().then((s) => {
+      if (!isMounted) return
+      setShell(s)
+    })
+    return () => { isMounted = false }
+  }, [])
 
   useEffect(() => {
     let isMounted = true
@@ -300,15 +309,15 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       {/* Agent terminal (hidden in shell-only mode) */}
       {!isShellOnly && (
         <>
-          <div style={{
-            flex: 1,
-            minHeight: 0,
-            display: activeTopTab === 'terminal' ? 'flex' : 'none',
-            flexDirection: 'column',
-            opacity: focusedPane === 'shell' ? 0.35 : 1,
-            transition: 'opacity 0.15s',
-          }}>
-            {agentArgs !== null && (
+          {activeTopTab === 'terminal' && agentArgs !== null && (
+            <div style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              opacity: focusedPane === 'shell' ? 0.35 : 1,
+              transition: 'opacity 0.15s',
+            }}>
               <XtermPane
                 key={`agent-${agentSession}`}
                 id={`${launchTarget}-${projectPath}-${agentSession}`}
@@ -320,8 +329,8 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                 onFocus={() => setFocusedPane('agent')}
                 onBlur={() => setFocusedPane((p) => p === 'agent' ? null : p)}
               />
-            )}
-          </div>
+            </div>
+          )}
           <div style={{
             flex: 1,
             minHeight: 0,
@@ -529,36 +538,38 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       {/* Shell terminal */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', opacity: focusedPane === 'agent' ? 0.35 : 1, transition: 'opacity 0.15s' }}>
         {shellTabs.map((shellSession) => (
-          <div
-            key={`shell-pane-${shellSession}`}
-            style={{
-              flex: 1,
-              minHeight: 0,
-              display: shellSession === activeShellTab ? 'flex' : 'none',
-              flexDirection: 'column',
-            }}
-          >
-            <XtermPane
-              key={`shell-${shellSession}`}
-              ref={(handle) => {
-                if (handle) shellRefs.current.set(shellSession, handle)
-                else shellRefs.current.delete(shellSession)
+          shellSession === activeShellTab && shell !== null && (
+            <div
+              key={`shell-pane-${shellSession}`}
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
               }}
-              id={`shell-${projectPath}-${shellSession}`}
-              cwd={projectPath}
-              command={shell}
-              args={[]}
-              onStatusChange={(status) => {
-                setShellActivity((current) => ({ ...current, [shellSession]: status }))
-              }}
-              onExit={() => {
-                setExitedShells((current) => (current.includes(shellSession) ? current : [...current, shellSession]))
-                setShellActivity((current) => ({ ...current, [shellSession]: 'waiting' }))
-              }}
-              onFocus={() => setFocusedPane('shell')}
-              onBlur={() => setFocusedPane((p) => p === 'shell' ? null : p)}
-            />
-          </div>
+            >
+              <XtermPane
+                key={`shell-${shellSession}`}
+                ref={(handle) => {
+                  if (handle) shellRefs.current.set(shellSession, handle)
+                  else shellRefs.current.delete(shellSession)
+                }}
+                id={`shell-${projectPath}-${shellSession}`}
+                cwd={projectPath}
+                command={shell}
+                args={[]}
+                onStatusChange={(status) => {
+                  setShellActivity((current) => ({ ...current, [shellSession]: status }))
+                }}
+                onExit={() => {
+                  setExitedShells((current) => (current.includes(shellSession) ? current : [...current, shellSession]))
+                  setShellActivity((current) => ({ ...current, [shellSession]: 'waiting' }))
+                }}
+                onFocus={() => setFocusedPane('shell')}
+                onBlur={() => setFocusedPane((p) => p === 'shell' ? null : p)}
+              />
+            </div>
+          )
         ))}
       </div>
     </div>

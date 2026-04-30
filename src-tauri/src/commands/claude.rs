@@ -22,3 +22,10 @@ fn dirs_fallback() -> String {
     std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| "/home/unknown".to_string())
 }
+
+#[tauri::command]
+pub fn get_default_shell() -> String {
+    std::env::var("SHELL")
+        .or_else(|_| std::env::var("COMSPEC"))
+        .unwrap_or_else(|_| "/bin/bash".to_string())
+}

@@ -32,7 +32,7 @@ export default function LeftPane({ onRefreshProjects }: Props) {
   const [search, setSearch] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
-  const [moveRenameProject, setMoveRenameProject] = useState<Project | null>(null)
+  const [renameTarget, setRenameTarget] = useState<Project | null>(null)
   const [moveRenameSummary, setMoveRenameSummary] = useState<{ changes: string[]; error?: string } | null>(null)
   const allProjects = sortedProjects()
   const projects = search
@@ -57,9 +57,9 @@ export default function LeftPane({ onRefreshProjects }: Props) {
   }, [contextMenu])
 
   const handleMoveRenameConfirm = async (newPath: string) => {
-    if (!moveRenameProject) return
-    const oldPath = moveRenameProject.path
-    setMoveRenameProject(null)
+    if (!renameTarget) return
+    const oldPath = renameTarget.path
+    setRenameTarget(null)
     const result = await moveRenameProject(oldPath, newPath)
     setMoveRenameSummary({ changes: result.changes, error: result.error })
     if (result.success) {
@@ -232,7 +232,7 @@ export default function LeftPane({ onRefreshProjects }: Props) {
         >
           <button
             onClick={() => {
-              setMoveRenameProject(contextMenu.project)
+              setRenameTarget(contextMenu.project)
               setContextMenu(null)
             }}
             style={{
@@ -272,10 +272,10 @@ export default function LeftPane({ onRefreshProjects }: Props) {
         onSaved={onRefreshProjects}
       />
 
-      {moveRenameProject && (
+      {renameTarget && (
         <MoveRenameDialog
-          projectPath={moveRenameProject.path}
-          onClose={() => setMoveRenameProject(null)}
+          projectPath={renameTarget.path}
+          onClose={() => setRenameTarget(null)}
           onConfirm={handleMoveRenameConfirm}
         />
       )}
