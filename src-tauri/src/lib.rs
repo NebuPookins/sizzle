@@ -56,6 +56,7 @@ pub fn run() {
             commands::set_project_marker,
             commands::move_rename_project,
             commands::claude_has_session,
+            commands::command_exists,
             commands::get_default_shell,
             commands::pty_create,
             commands::pty_write,

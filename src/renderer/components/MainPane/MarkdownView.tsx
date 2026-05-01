@@ -5,6 +5,7 @@ import rehypeHighlight from 'rehype-highlight'
 import { LaunchTarget, Project, useAppStore } from '../../store/appStore'
 import FileExplorerPane from './FileExplorerPane'
 import {
+  commandExists,
   getMarkdownFiles,
   getProjectRepositoryInfo,
   readMarkdownFile,
@@ -30,6 +31,8 @@ export default function MarkdownView({ project }: Props) {
   const [tagInput, setTagInput] = useState('')
   const [primaryTagInput, setPrimaryTagInput] = useState('')
   const [customPresets, setCustomPresets] = useState<AgentPreset[]>([])
+  const [hasClaude, setHasClaude] = useState(true)
+  const [hasCodex, setHasCodex] = useState(true)
   const { launchProject, setProjectTagOverride, setProjectDetectedTags, setCustomAgentInfo } = useAppStore()
 
   useEffect(() => {
@@ -42,10 +45,14 @@ export default function MarkdownView({ project }: Props) {
       getMarkdownFiles(project.path),
       getProjectRepositoryInfo(project.path),
       getAgentPresets(),
-    ]).then(([markdownFiles, repositoryInfo, presets]) => {
+      commandExists('claude'),
+      commandExists('codex'),
+    ]).then(([markdownFiles, repositoryInfo, presets, hasClaudeBin, hasCodexBin]) => {
       setFiles(markdownFiles)
       setGithubUrl(repositoryInfo.githubUrl)
       setCustomPresets(presets)
+      setHasClaude(hasClaudeBin)
+      setHasCodex(hasCodexBin)
       if (markdownFiles.length > 0) setActiveFile(markdownFiles[0])
       else if (repositoryInfo.githubUrl) setActiveFile(GITHUB_TAB_ID)
       else setActiveFile('explorer')
@@ -172,42 +179,46 @@ export default function MarkdownView({ project }: Props) {
       }}>
         <div style={{ fontWeight: 700, fontSize: 16, flex: 1 }}>{project.name}</div>
         <div style={{ fontSize: 11, color: 'var(--text-muted)', flex: 1 }}>{project.path}</div>
-        <button
-          onClick={() => handleLaunch('claude')}
-          style={{
-            background: 'var(--accent)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            padding: '7px 18px',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            flexShrink: 0,
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-hover)' }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)' }}
-        >
-          Launch Claude
-        </button>
-        <button
-          onClick={() => handleLaunch('codex')}
-          style={{
-            background: 'var(--bg-hover)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-            borderRadius: 6,
-            padding: '7px 14px',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            flexShrink: 0,
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-selected)' }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)' }}
-        >
-          Launch Codex
-        </button>
+        {hasClaude && (
+          <button
+            onClick={() => handleLaunch('claude')}
+            style={{
+              background: 'var(--accent)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              padding: '7px 18px',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-hover)' }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)' }}
+          >
+            Launch Claude
+          </button>
+        )}
+        {hasCodex && (
+          <button
+            onClick={() => handleLaunch('codex')}
+            style={{
+              background: 'var(--bg-hover)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              padding: '7px 14px',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-selected)' }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)' }}
+          >
+            Launch Codex
+          </button>
+        )}
         <button
           onClick={() => handleLaunch('shell')}
           style={{

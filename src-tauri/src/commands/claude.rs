@@ -29,3 +29,10 @@ pub fn get_default_shell() -> String {
         .or_else(|_| std::env::var("COMSPEC"))
         .unwrap_or_else(|_| "/bin/bash".to_string())
 }
+
+#[tauri::command]
+pub fn command_exists(command: String) -> bool {
+    std::env::var_os("PATH").map_or(false, |paths| {
+        std::env::split_paths(&paths).any(|dir| dir.join(&command).is_file())
+    })
+}

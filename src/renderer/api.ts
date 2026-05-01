@@ -204,6 +204,9 @@ interface PtyExitPayload {
 export const getDefaultShell = (): Promise<string> =>
   invoke<string>('get_default_shell')
 
+export const commandExists = (command: string): Promise<boolean> =>
+  invoke<boolean>('command_exists', { command })
+
 // Projects
 export const moveRenameProject = (oldPath: string, newPath: string): Promise<MoveRenameResult> =>
   invoke('move_rename_project', { oldPath, newPath })
