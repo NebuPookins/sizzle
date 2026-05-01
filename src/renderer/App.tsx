@@ -49,7 +49,6 @@ function parsePtyId(id: string): ParsedPtyId | null {
   if (firstDash === -1) return null
 
   const launchTarget = prefix.slice(0, firstDash) as LaunchTarget
-  if (launchTarget !== 'claude' && launchTarget !== 'codex' && launchTarget !== 'shell') return null
 
   return {
     type: 'agent',
