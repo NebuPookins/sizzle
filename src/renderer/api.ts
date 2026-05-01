@@ -85,6 +85,11 @@ export interface MoveRenameResult {
   changes: string[]
 }
 
+export interface AgentPreset {
+  label: string
+  command: string
+}
+
 export interface PtyCreateResult {
   replay: string
   exitCode: number | null
@@ -105,6 +110,13 @@ export const setScanSettings = (settings: ScanSettings): Promise<ScanSettings> =
 
 export const addIgnoreRoot = (rootPath: string): Promise<ScanSettings> =>
   invoke('add_ignore_root', { rootPath })
+
+// Agent presets
+export const getAgentPresets = (): Promise<AgentPreset[]> =>
+  invoke('get_agent_presets')
+
+export const setAgentPresets = (presets: AgentPreset[]): Promise<AgentPreset[]> =>
+  invoke('set_agent_presets', { presets })
 
 // Files / Markdown
 export const getMarkdownFiles = (projectPath: string): Promise<string[]> =>

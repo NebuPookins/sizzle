@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { ProjectMarker, ProjectTag, ProjectTagOverride } from '../api'
-import type { LaunchTarget, ReloadSnapshot } from '../../shared/reload'
+import type { LaunchTarget, ProjectTerminalStateSnapshot, ReloadSnapshot } from '../../shared/reload'
 
 export interface Project {
   name: string
@@ -21,6 +21,8 @@ export interface ProjectTerminalState {
   activeShellTab: number
   nextShellSession: number
   activeTopTab: 'terminal' | 'explorer' | string
+  initialCommand?: string
+  customAgent?: { label: string; command: string }
 }
 
 type ClaudeStatus = 'working' | 'waiting'
@@ -53,6 +55,9 @@ interface AppState {
   relaunchAgentTerminal(projectPath: string): void
   relaunchShellTab(projectPath: string, shellSession: number): void
   getTerminalState(projectPath: string): ProjectTerminalState | null
+  setShellInitialCommand(projectPath: string, command: string): void
+  clearShellInitialCommand(projectPath: string): void
+  setCustomAgentInfo(projectPath: string, label: string, command: string): void
   hydrateReloadSnapshot(snapshot: ReloadSnapshot): void
   createReloadSnapshot(): ReloadSnapshot
   setReloadMessage(message: string | null): void
@@ -97,6 +102,8 @@ function normalizeTerminalState(
     activeShellTab,
     nextShellSession: Math.max(state?.nextShellSession ?? 0, maxShellSession + 1),
     activeTopTab: state?.activeTopTab ?? 'terminal',
+    initialCommand: state?.initialCommand ?? undefined,
+    customAgent: state?.customAgent,
   }
 }
 
@@ -365,6 +372,46 @@ export const useAppStore = create<AppState>((set, get) => ({
     return get().terminalStates[projectPath] ?? null
   },
 
+  setShellInitialCommand(projectPath, command) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      return {
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: { ...current, initialCommand: command },
+        },
+      }
+    })
+  },
+
+  clearShellInitialCommand(projectPath) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      const { initialCommand: _unused, ...rest } = current
+      return {
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: { ...rest, initialCommand: undefined },
+        },
+      }
+    })
+  },
+
+  setCustomAgentInfo(projectPath, label, command) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      return {
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: { ...current, customAgent: { label, command } },
+        },
+      }
+    })
+  },
+
   hydrateReloadSnapshot(snapshot) {
     set((state) => {
       const launchedProjects = new Set(snapshot.terminals.map((terminal) => terminal.projectPath))
@@ -392,7 +439,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         .map((projectPath) => {
           const terminalState = state.terminalStates[projectPath]
           if (!terminalState) return null
-          return {
+          const snap: ProjectTerminalStateSnapshot = {
             projectPath,
             launchTarget: terminalState.launchTarget,
             agentSession: terminalState.agentSession,
@@ -402,6 +449,13 @@ export const useAppStore = create<AppState>((set, get) => ({
             nextShellSession: terminalState.nextShellSession,
             activeTopTab: terminalState.activeTopTab,
           }
+          if (terminalState.initialCommand) {
+            snap.initialCommand = terminalState.initialCommand
+          }
+          if (terminalState.customAgent) {
+            snap.customAgent = terminalState.customAgent
+          }
+          return snap
         })
         .filter((value): value is ReloadSnapshot['terminals'][number] => value !== null),
       timestamp: Date.now(),

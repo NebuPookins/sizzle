@@ -5,6 +5,7 @@ import { addIgnoreRoot, setProjectMarker as persistProjectMarker, moveRenameProj
 import type { MoveRenameResult } from '../../api'
 import ProjectItem from './ProjectItem'
 import ScanSettingsDialog from './ScanSettingsDialog'
+import AgentPresetsDialog from './AgentPresetsDialog'
 import MoveRenameDialog from './MoveRenameDialog'
 import MoveRenameSummaryDialog from './MoveRenameSummaryDialog'
 
@@ -31,6 +32,7 @@ export default function LeftPane({ onRefreshProjects }: Props) {
   } = useAppStore()
   const [search, setSearch] = useState('')
   const [showSettings, setShowSettings] = useState(false)
+  const [showAgentPresets, setShowAgentPresets] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [renameTarget, setRenameTarget] = useState<Project | null>(null)
   const [moveRenameSummary, setMoveRenameSummary] = useState<{ changes: string[]; error?: string } | null>(null)
@@ -213,6 +215,21 @@ export default function LeftPane({ onRefreshProjects }: Props) {
         >
           Scan settings
         </button>
+        <button
+          onClick={() => setShowAgentPresets(true)}
+          style={{
+            width: '100%',
+            background: 'var(--bg-hover)',
+            border: '1px solid var(--border)',
+            color: 'var(--text-primary)',
+            borderRadius: 6,
+            fontSize: 12,
+            padding: '7px 10px',
+            cursor: 'pointer',
+          }}
+        >
+          Agent presets
+        </button>
       </div>
 
       {contextMenu && (
@@ -270,6 +287,11 @@ export default function LeftPane({ onRefreshProjects }: Props) {
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
         onSaved={onRefreshProjects}
+      />
+
+      <AgentPresetsDialog
+        isOpen={showAgentPresets}
+        onClose={() => setShowAgentPresets(false)}
       />
 
       {renameTarget && (

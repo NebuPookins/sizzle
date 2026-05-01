@@ -10,5 +10,6 @@ export interface CodingAgent {
 
 export function getAgent(target: LaunchTarget): CodingAgent {
   if (target === 'codex') return codexAgent
-  return claudeAgent
+  if (target === 'claude') return claudeAgent
+  return { label: target, command: target, getArgs: async () => [] }
 }

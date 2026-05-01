@@ -63,6 +63,8 @@ pub fn run() {
             commands::pty_detach,
             commands::pty_kill,
             commands::pty_list_sessions,
+            commands::get_agent_presets,
+            commands::set_agent_presets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running sizzle");

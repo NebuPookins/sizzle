@@ -11,8 +11,9 @@ import {
   setLastLaunched,
   setTagOverride,
   rescanProjectTags,
+  getAgentPresets,
 } from '../../api'
-import type { ProjectTag, ProjectTagOverride } from '../../api'
+import type { ProjectTag, ProjectTagOverride, AgentPreset } from '../../api'
 
 interface Props {
   project: Project
@@ -28,7 +29,8 @@ export default function MarkdownView({ project }: Props) {
   const [isEditingTags, setIsEditingTags] = useState(false)
   const [tagInput, setTagInput] = useState('')
   const [primaryTagInput, setPrimaryTagInput] = useState('')
-  const { launchProject, setProjectTagOverride, setProjectDetectedTags } = useAppStore()
+  const [customPresets, setCustomPresets] = useState<AgentPreset[]>([])
+  const { launchProject, setProjectTagOverride, setProjectDetectedTags, setCustomAgentInfo } = useAppStore()
 
   useEffect(() => {
     setFiles([])
@@ -39,16 +41,18 @@ export default function MarkdownView({ project }: Props) {
     Promise.all([
       getMarkdownFiles(project.path),
       getProjectRepositoryInfo(project.path),
-    ]).then(([markdownFiles, repositoryInfo]) => {
+      getAgentPresets(),
+    ]).then(([markdownFiles, repositoryInfo, presets]) => {
       setFiles(markdownFiles)
       setGithubUrl(repositoryInfo.githubUrl)
+      setCustomPresets(presets)
       if (markdownFiles.length > 0) setActiveFile(markdownFiles[0])
       else if (repositoryInfo.githubUrl) setActiveFile(GITHUB_TAB_ID)
       else setActiveFile('explorer')
     })
   }, [project.path])
 
-  // Poll for markdown files being added or removed in the project directory
+  // Poll for markdown files and custom presets
   useEffect(() => {
     const id = window.setInterval(() => {
       getMarkdownFiles(project.path).then((newFiles) => {
@@ -68,6 +72,7 @@ export default function MarkdownView({ project }: Props) {
           return prev
         })
       })
+      getAgentPresets().then(setCustomPresets)
     }, 5000)
     return () => window.clearInterval(id)
   }, [project.path])
@@ -89,6 +94,12 @@ export default function MarkdownView({ project }: Props) {
   async function handleLaunch(target: LaunchTarget) {
     await setLastLaunched(project.path)
     launchProject(project, target)
+  }
+
+  async function handleCustomLaunch(preset: AgentPreset) {
+    await setLastLaunched(project.path)
+    launchProject(project, 'custom')
+    setCustomAgentInfo(project.path, preset.label, preset.command)
   }
 
   const tabName = (f: string) => f.split('/').pop() ?? f
@@ -215,6 +226,27 @@ export default function MarkdownView({ project }: Props) {
         >
           Shell
         </button>
+        {customPresets.map((preset) => (
+          <button
+            key={preset.label}
+            onClick={() => handleCustomLaunch(preset)}
+            style={{
+              background: 'var(--bg-hover)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              padding: '7px 14px',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-selected)' }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-hover)' }}
+          >
+            {preset.label}
+          </button>
+        ))}
       </div>
 
       <div style={{

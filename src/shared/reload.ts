@@ -1,4 +1,4 @@
-export type LaunchTarget = 'claude' | 'codex' | 'shell'
+export type LaunchTarget = string
 
 export interface ProjectTerminalStateSnapshot {
   projectPath: string
@@ -9,6 +9,8 @@ export interface ProjectTerminalStateSnapshot {
   activeShellTab: number
   nextShellSession: number
   activeTopTab: string
+  initialCommand?: string
+  customAgent?: { label: string; command: string }
 }
 
 export interface ReloadSnapshot {

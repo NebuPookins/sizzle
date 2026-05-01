@@ -30,6 +30,13 @@ pub struct ProjectMeta {
     pub marker: ProjectMarker,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPreset {
+    pub label: String,
+    pub command: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanSettings {
@@ -44,6 +51,8 @@ struct DB {
     projects: HashMap<String, ProjectMeta>,
     #[serde(default)]
     scan_settings: Option<ScanSettings>,
+    #[serde(default)]
+    agent_presets: Vec<AgentPreset>,
 }
 
 pub struct MetadataStore {
@@ -82,6 +91,7 @@ impl MetadataStore {
                 DB {
                     projects: HashMap::new(),
                     scan_settings: None,
+                    agent_presets: Vec::new(),
                 }
             }),
             Err(e) => {
@@ -89,6 +99,7 @@ impl MetadataStore {
                 DB {
                     projects: HashMap::new(),
                     scan_settings: None,
+                    agent_presets: Vec::new(),
                 }
             },
         };
@@ -327,6 +338,17 @@ impl MetadataStore {
         self.write_db(&db);
         normalized
     }
+
+    pub fn get_agent_presets(&self) -> Vec<AgentPreset> {
+        self.read_db().agent_presets
+    }
+
+    pub fn set_agent_presets(&self, presets: Vec<AgentPreset>) -> Vec<AgentPreset> {
+        let mut db = self.read_db();
+        db.agent_presets = presets;
+        self.write_db(&db);
+        db.agent_presets
+    }
 }
 
 // Tauri commands
@@ -382,4 +404,17 @@ pub fn add_ignore_root(state: State<'_, MetadataStore>, root_path: String) -> Sc
     let mut current = state.get_scan_settings();
     current.ignore_roots.push(root_path);
     state.set_scan_settings(&current)
+}
+
+#[tauri::command]
+pub fn get_agent_presets(state: State<'_, MetadataStore>) -> Vec<AgentPreset> {
+    state.get_agent_presets()
+}
+
+#[tauri::command]
+pub fn set_agent_presets(
+    state: State<'_, MetadataStore>,
+    presets: Vec<AgentPreset>,
+) -> Vec<AgentPreset> {
+    state.set_agent_presets(presets)
 }

@@ -45,7 +45,11 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const nextShellSession = terminalState?.nextShellSession ?? 1
   const [shell, setShell] = useState<string | null>(null)
   const [agentArgs, setAgentArgs] = useState<string[] | null>(null)
-  const agent = isShellOnly ? null : getAgent(launchTarget)
+  const agent = isShellOnly
+    ? null
+    : launchTarget === 'custom' && terminalState?.customAgent
+      ? { label: terminalState.customAgent.label, command: terminalState.customAgent.command, getArgs: async () => [] }
+      : getAgent(launchTarget)
   const shellRefs = useRef<Map<number, XtermPaneHandle>>(new Map())
   const tabName = (filePath: string) => filePath.split('/').pop() ?? filePath
   const allShellsExited = shellTabs.length > 0 && shellTabs.every((shellSession) => exitedShells.includes(shellSession))
@@ -558,6 +562,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                 cwd={projectPath}
                 command={shell}
                 args={[]}
+                initialCommand={terminalState?.initialCommand}
                 onStatusChange={(status) => {
                   setShellActivity((current) => ({ ...current, [shellSession]: status }))
                 }}
