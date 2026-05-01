@@ -37,6 +37,7 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const onExitRef = useRef(onExit)
+  const replayWrittenRef = useRef(false)
   const [crashed, setCrashed] = useState(false)
 
   useImperativeHandle(ref, () => ({
@@ -49,6 +50,8 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
 
   useEffect(() => {
     if (!containerRef.current) return
+
+    replayWrittenRef.current = false
 
     const term = new Terminal({
       theme: {
@@ -100,7 +103,7 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
     let currentStatus: 'working' | 'waiting' = 'waiting'
 
     const ptyDataUnsub = onPtyData((ptyId, data) => {
-      if (ptyId !== id) return
+      if (ptyId !== id || !replayWrittenRef.current || !termRef.current) return
       term.write(data)
 
       if (onStatusChange) {
@@ -150,6 +153,7 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
       ptyCreate(id, cwd, command, args).then(({ replay, exitCode }) => {
         if (termRef.current !== term) return
         if (replay) term.write(replay)
+        replayWrittenRef.current = true
         if (exitCode !== null) {
           onExitRef.current?.()
           return
@@ -171,9 +175,9 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
       disposeOnData.dispose()
       observer.disconnect()
       ptyDetach(id)
-      term.dispose()
       termRef.current = null
       fitRef.current = null
+      term.dispose()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, cwd, command, initialCommand])
