@@ -13,7 +13,7 @@ Sizzle is open source and usable now, but it is still early-stage and developer-
 ## Why use it
 
 - You are juggling many repos, prototypes, tools, and half-finished ideas at once.
-- You want an IDE-like workspace organized around AI agent delegation rather than manual window management.
+- You want an IDE-like workspace organized around AI agent delegation rather than direct coding.
 - You want to bounce between projects quickly while multiple agents work in parallel.
 - You want one place to browse projects, read context, inspect files, and launch agent-backed terminals.
 
@@ -58,12 +58,6 @@ npm run dev
 
 This starts the Vite dev server and launches the Tauri desktop window. On first launch, Sizzle will ask you to choose the root directory it should scan for projects.
 
-To run the frontend Vite server standalone (without the Tauri window):
-
-```bash
-npm run dev:renderer
-```
-
 ## Build
 
 ```bash
@@ -81,14 +75,6 @@ By default, Sizzle stores its local state under:
 ```
 
 That includes scan settings and project metadata.
-
-## First-Run Flow
-
-1. Launch the app.
-2. Choose a root folder when prompted.
-3. Wait for Sizzle to scan for projects.
-4. Pick a project from the sidebar.
-5. Read the README, inspect files, or launch a terminal/agent session.
 
 ## License
 
