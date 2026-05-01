@@ -33,8 +33,8 @@ pub(crate) struct PtySession {
     writer: Box<dyn Write + Send>,
     child_killer: Box<dyn ChildKiller + Send>,
     master_pty: Box<dyn MasterPty + Send>,
-    history: String,
-    exit_code: Option<i32>,
+    history: Arc<Mutex<String>>,
+    exit_code: Arc<Mutex<Option<i32>>>,
 }
 
 pub struct PtyRegistry {
@@ -55,9 +55,11 @@ impl PtyRegistry {
         app_handle: AppHandle,
     ) -> PtyCreateResult {
         if let Some(existing) = self.ptys.get(id) {
+            let replay = existing.history.lock().unwrap().clone();
+            let exit_code = *existing.exit_code.lock().unwrap();
             return PtyCreateResult {
-                replay: existing.history.clone(),
-                exit_code: existing.exit_code,
+                replay,
+                exit_code,
             };
         }
 
@@ -114,12 +116,15 @@ impl PtyRegistry {
             }
         };
 
+        let history = Arc::new(Mutex::new(String::new()));
+        let exit_code = Arc::new(Mutex::new(None));
+
         let session = PtySession {
             writer,
             child_killer: child,
             master_pty: pair.master,
-            history: String::new(),
-            exit_code: None,
+            history: history.clone(),
+            exit_code: exit_code.clone(),
         };
 
         self.ptys.insert(id.to_string(), session);
@@ -127,8 +132,6 @@ impl PtyRegistry {
         // Reader thread
         let id_clone = id.to_string();
         let app_clone = app_handle.clone();
-        let history = Arc::new(Mutex::new(String::new()));
-        let history_clone = history.clone();
 
         thread::spawn(move || {
             // Clones for use after catch_unwind
@@ -151,7 +154,7 @@ impl PtyRegistry {
                             String::from_utf8_lossy(&buf[..n]).to_string();
 
                         {
-                            let mut hist = history_clone.lock().unwrap();
+                            let mut hist = history.lock().unwrap();
                             hist.push_str(&data);
                             trim_front_to(&mut hist, HISTORY_LIMIT);
                         }
@@ -165,10 +168,11 @@ impl PtyRegistry {
                 },
             ));
 
-            let exit_code = if result.is_err() { -1 } else { 0 };
+            let code = if result.is_err() { -1 } else { 0 };
+            *exit_code.lock().unwrap() = Some(code);
             let _ = exit_app.emit(
                 "pty:exit",
-                PtyExitEvent { id: exit_id, exit_code },
+                PtyExitEvent { id: exit_id, exit_code: code },
             );
         });
 
