@@ -287,7 +287,12 @@ pub fn pty_list_sessions(
     state: State<'_, Mutex<PtyRegistry>>,
 ) -> Vec<String> {
     let registry = state.lock().unwrap();
-    registry.ptys.keys().cloned().collect()
+    registry
+        .ptys
+        .iter()
+        .filter(|(_, session)| session.exit_code.lock().unwrap().is_none())
+        .map(|(id, _)| id.clone())
+        .collect()
 }
 
 #[cfg(test)]
