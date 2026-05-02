@@ -69,9 +69,18 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     } else {
       if (!agentExited || !allShellsExited) return
     }
-    const timer = setTimeout(() => unlaunchProject(projectPath), 2000)
+    const timer = setTimeout(() => {
+      // Kill all PTYs before unlaunching so that reopening creates fresh terminals
+      for (const shellSession of shellTabs) {
+        ptyKill(`shell-${projectPath}-${shellSession}`)
+      }
+      if (!isShellOnly) {
+        ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
+      }
+      unlaunchProject(projectPath)
+    }, 2000)
     return () => clearTimeout(timer)
-  }, [agentExited, allShellsExited, isShellOnly, projectPath, unlaunchProject])
+  }, [agentExited, allShellsExited, isShellOnly, projectPath, unlaunchProject, launchTarget, agentSession, shellTabs])
 
   useEffect(() => {
     setExitedShells((current) => current.filter((shellSession) => shellTabs.includes(shellSession)))

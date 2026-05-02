@@ -131,6 +131,11 @@ describe('TerminalView', () => {
 
     expect(mockUnlaunch).toHaveBeenCalledTimes(1)
     expect(mockUnlaunch).toHaveBeenCalledWith('/projectA')
+
+    // PTYs should be killed before unlaunching so reopening creates fresh terminals
+    const { ptyKill } = await import('../../../api')
+    expect(ptyKill).toHaveBeenCalledWith('shell-/projectA-0')
+    expect(ptyKill).toHaveBeenCalledTimes(1)
   })
 
   it('does not auto-close project when shells are still running', async () => {
@@ -152,5 +157,48 @@ describe('TerminalView', () => {
     await act(() => vi.advanceTimersByTimeAsync(3000))
 
     expect(mockUnlaunch).not.toHaveBeenCalled()
+  })
+
+  it('kills all project PTYs before auto-closing when all terminals exit (agent mode)', async () => {
+    useAppStore.setState({
+      launchedProjects: new Set(['/projectA']),
+      terminalStates: {
+        '/projectA': { ...baseTerminalState, launchTarget: 'claude' },
+      },
+    })
+
+    const mockUnlaunch = vi.fn()
+    useAppStore.setState({ unlaunchProject: mockUnlaunch })
+
+    render(<TerminalView projectPath="/projectA" launchTarget="claude" />)
+    await flushMicrotasks()
+
+    const XtermPane = (await import('../XtermPane')).default as ReturnType<typeof vi.fn>
+    const { ptyKill } = await import('../../../api')
+
+    // Agent renders first (calls[0]), then shell (calls[1])
+    const agentProps = XtermPane.mock.calls[0][0]
+    const shellProps = XtermPane.mock.calls[1][0]
+    expect(agentProps.id).toBe('claude-/projectA-0')
+    expect(shellProps.id).toBe('shell-/projectA-0')
+
+    // Shell exits first — auto-close should NOT fire (agent still running)
+    await act(() => { shellProps.onExit() })
+    await act(() => vi.advanceTimersByTimeAsync(3000))
+    expect(mockUnlaunch).not.toHaveBeenCalled()
+
+    // Agent exits — both conditions met, 2s timer starts
+    await act(() => { agentProps.onExit() })
+
+    // Advance past the 2s auto-close timer
+    await act(() => vi.advanceTimersByTimeAsync(3000))
+
+    expect(mockUnlaunch).toHaveBeenCalledTimes(1)
+    expect(mockUnlaunch).toHaveBeenCalledWith('/projectA')
+
+    // Both agent and shell PTYs should be killed
+    expect(ptyKill).toHaveBeenCalledWith('claude-/projectA-0')
+    expect(ptyKill).toHaveBeenCalledWith('shell-/projectA-0')
+    expect(ptyKill).toHaveBeenCalledTimes(2)
   })
 })
