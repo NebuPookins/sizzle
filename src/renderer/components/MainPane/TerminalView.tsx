@@ -51,6 +51,8 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       ? { label: terminalState.customAgent.label, command: terminalState.customAgent.command, getArgs: async () => [] }
       : getAgent(launchTarget)
   const shellRefs = useRef<Map<number, XtermPaneHandle>>(new Map())
+  const projectPathRef = useRef(projectPath)
+  projectPathRef.current = projectPath
   const tabName = (filePath: string) => filePath.split('/').pop() ?? filePath
   const allShellsExited = shellTabs.length > 0 && shellTabs.every((shellSession) => exitedShells.includes(shellSession))
   const activeShellExited = exitedShells.includes(activeShellTab)
@@ -79,7 +81,20 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       }
       unlaunchProject(projectPath)
     }, 2000)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      // If switching to a different project while auto-close is pending,
+      // close the old project immediately instead of just cancelling the timer
+      if (projectPathRef.current !== projectPath) {
+        for (const shellSession of shellTabs) {
+          ptyKill(`shell-${projectPath}-${shellSession}`)
+        }
+        if (!isShellOnly) {
+          ptyKill(`${launchTarget}-${projectPath}-${agentSession}`)
+        }
+        unlaunchProject(projectPath)
+      }
+    }
   }, [agentExited, allShellsExited, isShellOnly, projectPath, unlaunchProject, launchTarget, agentSession, shellTabs])
 
   useEffect(() => {

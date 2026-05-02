@@ -65,7 +65,7 @@ describe('TerminalView', () => {
     vi.clearAllMocks()
   })
 
-  it('resets stale shell exit state when switching to a different project', async () => {
+  it('closes the previous project immediately when switching projects while auto-close is pending', async () => {
     useAppStore.setState({
       launchedProjects: new Set(['/projectA', '/projectB']),
       terminalStates: {
@@ -87,21 +87,22 @@ describe('TerminalView', () => {
     expect(shellPaneProps).toBeDefined()
     expect(shellPaneProps.id).toBe('shell-/projectA-0')
 
-    // Simulate shell exit for projectA
+    // Simulate shell exit for projectA — this starts the 2s auto-close timer
     await act(() => {
       shellPaneProps.onExit()
     })
 
-    // Switch to projectB before the 2s auto-close timer fires
+    // Switch to projectB before the 2s timer fires
     rerender(<TerminalView projectPath="/projectB" launchTarget="shell" />)
     await flushMicrotasks()
 
-    // Advance past the auto-close delay
-    await act(() => vi.advanceTimersByTimeAsync(5000))
+    // The old project should close immediately instead of waiting for the timer
+    expect(mockUnlaunch).toHaveBeenCalledTimes(1)
+    expect(mockUnlaunch).toHaveBeenCalledWith('/projectA')
 
-    // unlaunchProject must NOT be called because the stale exitedShells
-    // state was reset when projectPath changed
-    expect(mockUnlaunch).not.toHaveBeenCalled()
+    // PTYs should be killed before unlaunching
+    const { ptyKill } = await import('../../../api')
+    expect(ptyKill).toHaveBeenCalledWith('shell-/projectA-0')
   })
 
   it('auto-closes project after 2s when all shells exit (shell-only mode)', async () => {
