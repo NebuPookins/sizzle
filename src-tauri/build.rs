@@ -3,6 +3,9 @@ fn main() {
     if let Err(e) = generate_api_manifest() {
         println!("cargo:warning=Failed to generate API manifest: {}", e);
     }
+    if let Err(e) = generate_icons() {
+        println!("cargo:warning=Failed to generate icons: {}", e);
+    }
 }
 
 fn generate_api_manifest() -> Result<(), Box<dyn std::error::Error>> {
@@ -227,6 +230,90 @@ fn snake_to_camel(s: &str) -> String {
         }
     }
     result
+}
+
+/// Generate bundle icons from app-icon.svg when the source SVG is newer than any output.
+fn generate_icons() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")?;
+    let icons_dir = std::path::Path::new(&manifest_dir).join("icons");
+
+    let svg_path = icons_dir.join("app-icon.svg");
+    if !svg_path.exists() {
+        return Ok(()); // no source SVG to generate from
+    }
+
+    let outputs = [
+        "32x32.png",
+        "128x128.png",
+        "128x128@2x.png",
+        "icon.ico",
+        "icon.icns",
+    ];
+
+    // Register all outputs as rerun-if-changed so cargo rebuilds when any is
+    // missing or stale — not just when the SVG changes (which wouldn't catch
+    // deletions or `git clean`).
+    for name in &outputs {
+        let p = icons_dir.join(name);
+        if p.exists() {
+            println!("cargo:rerun-if-changed={}", p.to_string_lossy());
+        }
+    }
+    println!("cargo:rerun-if-changed={}", svg_path.to_string_lossy());
+
+    let svg_mtime = std::fs::metadata(&svg_path)?.modified()?;
+    let all_up_to_date = outputs.iter().all(|f| {
+        let p = icons_dir.join(f);
+        p.exists() && std::fs::metadata(p).and_then(|m| m.modified()).ok() >= Some(svg_mtime)
+    });
+    if all_up_to_date {
+        return Ok(());
+    }
+
+    // Determine which convert tool is available (ImageMagick v6 vs v7)
+    let magick = if std::process::Command::new("magick")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        "magick"
+    } else {
+        "convert"
+    };
+
+    // Helper to run a command with nice errors
+    let run = |args: &[&str]| -> Result<(), Box<dyn std::error::Error>> {
+        let (cmd, cmd_args) = if args[0] == "magick" && magick == "magick" {
+            ("magick", &args[1..])
+        } else if args[0] == "magick" && magick == "convert" {
+            ("convert", &args[1..])
+        } else {
+            (args[0], &args[1..])
+        };
+        let output = std::process::Command::new(cmd)
+            .args(cmd_args)
+            .current_dir(&icons_dir)
+            .output()
+            .map_err(|e| format!("failed to run {}: {}", cmd, e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("{} failed: {}", cmd, stderr.trim()).into());
+        }
+        Ok(())
+    };
+
+    run(&["rsvg-convert", "-w", "32", "-h", "32", "app-icon.svg", "-o", "32x32.png"])?;
+    run(&["rsvg-convert", "-w", "128", "-h", "128", "app-icon.svg", "-o", "128x128.png"])?;
+    run(&["rsvg-convert", "-w", "256", "-h", "256", "app-icon.svg", "-o", "128x128@2x.png"])?;
+    run(&[
+        "magick", "convert", "-background", "none", "app-icon.svg",
+        "-define", "icon:auto-resize=256,128,96,64,48,32", "icon.ico",
+    ])?;
+    // ICNS: generate from the 128px PNG so we don't depend on SVG→ICNS support
+    run(&["magick", "convert", "128x128.png", "icon.icns"])?;
+
+    println!("cargo:warning=Generated app icons from app-icon.svg");
+    Ok(())
 }
 
 /// Extract event names from `.emit("name"` or `.emit(\n  "name"` calls.
