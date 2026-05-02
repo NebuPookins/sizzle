@@ -4,7 +4,7 @@ import LeftPane from './components/LeftPane/LeftPane'
 import MainPane from './components/MainPane/MainPane'
 import GitStatusPane from './components/GitStatusPane/GitStatusPane'
 import type { ProjectTag } from './api'
-import { scanProjects, getAllMetadata, consumeReloadSnapshot, setWindowTitle, ptyListSessions, getApiManifest } from './api'
+import { scanProjects, getAllMetadata, getAgentPresets, commandExists, consumeReloadSnapshot, setWindowTitle, ptyListSessions, getApiManifest } from './api'
 import type { LaunchTarget, ReloadSnapshot } from '../shared/reload'
 import { API_MANIFEST } from 'virtual:api-manifest'
 import { diffManifests, type ManifestDiff } from './diffManifests'
@@ -185,6 +185,17 @@ export default function App() {
         restoreBackendSessions().catch(() => {})
       }
       void loadProjects()
+    })
+
+    // Fetch globally-cached values once at startup
+    Promise.all([
+      getAgentPresets(),
+      commandExists('claude'),
+      commandExists('codex'),
+    ]).then(([presets, hasC, hasCx]) => {
+      useAppStore.getState().setAgentPresets(presets)
+      useAppStore.getState().setHasClaude(hasC)
+      useAppStore.getState().setHasCodex(hasCx)
     })
 
     // Check API sync

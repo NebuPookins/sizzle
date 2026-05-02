@@ -5,16 +5,13 @@ import rehypeHighlight from 'rehype-highlight'
 import { LaunchTarget, Project, useAppStore } from '../../store/appStore'
 import FileExplorerPane from './FileExplorerPane'
 import {
-  commandExists,
-  getMarkdownFiles,
-  getProjectRepositoryInfo,
+  getProjectDetail,
   readMarkdownFile,
   setLastLaunched,
   setTagOverride,
   rescanProjectTags,
-  getAgentPresets,
 } from '../../api'
-import type { ProjectTag, ProjectTagOverride, AgentPreset } from '../../api'
+import type { AgentPreset, ProjectTag, ProjectTagOverride } from '../../api'
 
 interface Props {
   project: Project
@@ -30,10 +27,7 @@ export default function MarkdownView({ project }: Props) {
   const [isEditingTags, setIsEditingTags] = useState(false)
   const [tagInput, setTagInput] = useState('')
   const [primaryTagInput, setPrimaryTagInput] = useState('')
-  const [customPresets, setCustomPresets] = useState<AgentPreset[]>([])
-  const [hasClaude, setHasClaude] = useState(true)
-  const [hasCodex, setHasCodex] = useState(true)
-  const { launchProject, setProjectTagOverride, setProjectDetectedTags, setCustomAgentInfo } = useAppStore()
+  const { launchProject, setProjectTagOverride, setProjectDetectedTags, setCustomAgentInfo, agentPresets, hasClaude, hasCodex } = useAppStore()
 
   useEffect(() => {
     setFiles([])
@@ -41,45 +35,35 @@ export default function MarkdownView({ project }: Props) {
     setContent(null)
     setGithubUrl(null)
 
-    Promise.all([
-      getMarkdownFiles(project.path),
-      getProjectRepositoryInfo(project.path),
-      getAgentPresets(),
-      commandExists('claude'),
-      commandExists('codex'),
-    ]).then(([markdownFiles, repositoryInfo, presets, hasClaudeBin, hasCodexBin]) => {
-      setFiles(markdownFiles)
-      setGithubUrl(repositoryInfo.githubUrl)
-      setCustomPresets(presets)
-      setHasClaude(hasClaudeBin)
-      setHasCodex(hasCodexBin)
-      if (markdownFiles.length > 0) setActiveFile(markdownFiles[0])
-      else if (repositoryInfo.githubUrl) setActiveFile(GITHUB_TAB_ID)
+    getProjectDetail(project.path).then((detail) => {
+      setFiles(detail.markdownFiles)
+      setGithubUrl(detail.githubUrl)
+      if (detail.markdownFiles.length > 0) setActiveFile(detail.markdownFiles[0])
+      else if (detail.githubUrl) setActiveFile(GITHUB_TAB_ID)
       else setActiveFile('explorer')
     })
   }, [project.path])
 
-  // Poll for markdown files and custom presets
+  // Poll for new markdown files
   useEffect(() => {
     const id = window.setInterval(() => {
-      getMarkdownFiles(project.path).then((newFiles) => {
+      getProjectDetail(project.path).then((detail) => {
         setFiles((prev) => {
           const same =
-            prev.length === newFiles.length && prev.every((f, i) => f === newFiles[i])
+            prev.length === detail.markdownFiles.length && prev.every((f, i) => f === detail.markdownFiles[i])
           if (same) return prev
-          return newFiles
+          return detail.markdownFiles
         })
         setActiveFile((prev) => {
           if (prev === null || prev === 'explorer' || prev === GITHUB_TAB_ID) {
-            return newFiles.length > 0 ? newFiles[0] : prev
+            return detail.markdownFiles.length > 0 ? detail.markdownFiles[0] : prev
           }
-          if (!newFiles.includes(prev)) {
-            return newFiles.length > 0 ? newFiles[0] : 'explorer'
+          if (!detail.markdownFiles.includes(prev)) {
+            return detail.markdownFiles.length > 0 ? detail.markdownFiles[0] : 'explorer'
           }
           return prev
         })
       })
-      getAgentPresets().then(setCustomPresets)
     }, 5000)
     return () => window.clearInterval(id)
   }, [project.path])
@@ -237,7 +221,7 @@ export default function MarkdownView({ project }: Props) {
         >
           Shell
         </button>
-        {customPresets.map((preset) => (
+        {agentPresets.map((preset) => (
           <button
             key={preset.label}
             onClick={() => handleCustomLaunch(preset)}

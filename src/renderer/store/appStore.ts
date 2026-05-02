@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ProjectMarker, ProjectTag, ProjectTagOverride } from '../api'
+import type { AgentPreset, ProjectMarker, ProjectTag, ProjectTagOverride } from '../api'
 import type { LaunchTarget, ProjectTerminalStateSnapshot, ReloadSnapshot } from '../../shared/reload'
 
 export interface Project {
@@ -38,6 +38,9 @@ interface AppState {
   shellStatus: Record<string, ShellStatus>
   reloadMessage: string | null
   autoSwitchMode: boolean
+  agentPresets: AgentPreset[]
+  hasClaude: boolean
+  hasCodex: boolean
 
   setProjects(projects: Project[]): void
   selectProject(project: Project): void
@@ -62,6 +65,9 @@ interface AppState {
   createReloadSnapshot(): ReloadSnapshot
   setReloadMessage(message: string | null): void
   setAutoSwitchMode(autoSwitchMode: boolean): void
+  setAgentPresets(presets: AgentPreset[]): void
+  setHasClaude(v: boolean): void
+  setHasCodex(v: boolean): void
   sortedProjects(): Project[]
 }
 
@@ -123,6 +129,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   shellStatus: {},
   reloadMessage: null,
   autoSwitchMode: false,
+  agentPresets: [],
+  hasClaude: true,
+  hasCodex: true,
 
   setProjects(projects) {
     set((state) => {
@@ -468,6 +477,18 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setAutoSwitchMode(autoSwitchMode) {
     set({ autoSwitchMode })
+  },
+
+  setAgentPresets(presets) {
+    set({ agentPresets: presets })
+  },
+
+  setHasClaude(v) {
+    set({ hasClaude: v })
+  },
+
+  setHasCodex(v) {
+    set({ hasCodex: v })
   },
 
   sortedProjects() {

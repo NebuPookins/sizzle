@@ -414,3 +414,22 @@ pub fn get_markdown_files(project_path: String) -> Vec<String> {
 pub fn read_markdown_file(file_path: String) -> Option<String> {
     fs::read_to_string(&file_path).ok()
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDetail {
+    pub markdown_files: Vec<String>,
+    pub is_git_repo: bool,
+    pub github_url: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_project_detail(project_path: String) -> ProjectDetail {
+    let markdown_files = get_markdown_files(project_path.clone());
+    let repo_info = super::git::get_project_repository_info(project_path);
+    ProjectDetail {
+        markdown_files,
+        is_git_repo: repo_info.is_git_repo,
+        github_url: repo_info.github_url,
+    }
+}

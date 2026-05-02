@@ -44,6 +44,7 @@ pub fn run() {
             commands::set_scan_settings,
             commands::add_ignore_root,
             commands::get_markdown_files,
+            commands::get_project_detail,
             commands::read_markdown_file,
             commands::list_directory,
             commands::preview_file,

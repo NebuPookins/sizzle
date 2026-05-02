@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getAgentPresets, setAgentPresets } from '../../api'
+import { useAppStore } from '../../store/appStore'
 import type { AgentPreset } from '../../api'
 
 interface Props {
@@ -46,6 +47,7 @@ export default function AgentPresetsDialog({ isOpen, onClose }: Props) {
     setSaving(true)
     try {
       await setAgentPresets(valid)
+      useAppStore.getState().setAgentPresets(valid)
       onClose()
     } finally {
       setSaving(false)

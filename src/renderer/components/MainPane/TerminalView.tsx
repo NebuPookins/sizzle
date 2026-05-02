@@ -7,7 +7,7 @@ import type { LaunchTarget } from '../../store/appStore'
 import { getAgent } from '../../agents'
 import XtermPane, { type XtermPaneHandle } from './XtermPane'
 import FileExplorerPane from './FileExplorerPane'
-import { getDefaultShell, getMarkdownFiles, readMarkdownFile, getProjectRepositoryInfo, ptyKill } from '../../api'
+import { getDefaultShell, getProjectDetail, readMarkdownFile, ptyKill } from '../../api'
 
 interface Props {
   projectPath: string
@@ -107,13 +107,10 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     setActiveMarkdown(null)
     setGithubUrl(null)
 
-    Promise.all([
-      getMarkdownFiles(projectPath),
-      getProjectRepositoryInfo(projectPath),
-    ]).then(([files, repositoryInfo]) => {
+    getProjectDetail(projectPath).then((detail) => {
       if (!isMounted) return
-      setMarkdownFiles(files)
-      setGithubUrl(repositoryInfo.githubUrl)
+      setMarkdownFiles(detail.markdownFiles)
+      setGithubUrl(detail.githubUrl)
     })
 
     return () => {
@@ -124,17 +121,17 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   // Poll for markdown files being added or removed
   useEffect(() => {
     const id = window.setInterval(() => {
-      getMarkdownFiles(projectPath).then((newFiles) => {
+      getProjectDetail(projectPath).then((detail) => {
         setMarkdownFiles((prev) => {
           const same =
-            prev.length === newFiles.length && prev.every((f, i) => f === newFiles[i])
+            prev.length === detail.markdownFiles.length && prev.every((f, i) => f === detail.markdownFiles[i])
           if (same) return prev
-          return newFiles
+          return detail.markdownFiles
         })
         const currentTab = useAppStore.getState().terminalStates[projectPath]?.activeTopTab ?? 'terminal'
         if (currentTab !== 'terminal' && currentTab !== 'explorer' && currentTab !== GITHUB_TAB_ID) {
-          if (!newFiles.includes(currentTab)) {
-            setActiveTopTab(projectPath, newFiles.length > 0 ? newFiles[0] : 'terminal')
+          if (!detail.markdownFiles.includes(currentTab)) {
+            setActiveTopTab(projectPath, detail.markdownFiles.length > 0 ? detail.markdownFiles[0] : 'terminal')
           }
         }
       })
