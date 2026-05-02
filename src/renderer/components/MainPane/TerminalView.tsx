@@ -55,6 +55,14 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const allShellsExited = shellTabs.length > 0 && shellTabs.every((shellSession) => exitedShells.includes(shellSession))
   const activeShellExited = exitedShells.includes(activeShellTab)
 
+  // Reset component-local state when switching to a different project,
+  // preventing stale exitedShells from closing the wrong project.
+  useEffect(() => {
+    setAgentExited(false)
+    setExitedShells([])
+    setShellActivity({})
+  }, [projectPath])
+
   useEffect(() => {
     if (isShellOnly) {
       if (!allShellsExited) return
