@@ -77,6 +77,10 @@ export default function ProjectItem({ project, isSelected, isLaunched, onMarkerC
   return (
     <div
       onClick={() => selectProject(project)}
+      onMouseDown={(e) => {
+        // Prevent the click from stealing focus away from the terminal
+        e.preventDefault()
+      }}
       onContextMenu={(event) => {
         event.preventDefault()
         onContextMenuRequest(project, event.clientX, event.clientY)

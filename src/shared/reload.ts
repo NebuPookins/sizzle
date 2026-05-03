@@ -9,6 +9,7 @@ export interface ProjectTerminalStateSnapshot {
   activeShellTab: number
   nextShellSession: number
   activeTopTab: string
+  focusedPane: 'agent' | 'shell' | null
   initialCommand?: string
   customAgent?: { label: string; command: string }
 }

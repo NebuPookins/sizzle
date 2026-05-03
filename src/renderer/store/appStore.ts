@@ -21,6 +21,7 @@ export interface ProjectTerminalState {
   activeShellTab: number
   nextShellSession: number
   activeTopTab: 'terminal' | 'explorer' | string
+  focusedPane: 'agent' | 'shell' | null
   initialCommand?: string
   customAgent?: { label: string; command: string }
 }
@@ -32,6 +33,7 @@ interface AppState {
   projects: Project[]
   selectedProjectPath: string | null
   selectedProject: Project | null
+  previousProjectPath: string | null
   launchedProjects: Set<string>
   terminalStates: Record<string, ProjectTerminalState>
   claudeStatus: Record<string, ClaudeStatus>
@@ -52,6 +54,7 @@ interface AppState {
   setProjectMarker(projectPath: string, marker: ProjectMarker): void
   setProjectDetectedTags(projectPath: string, detectedTags: ProjectTag[]): void
   setActiveTopTab(projectPath: string, tab: 'terminal' | 'explorer' | string): void
+  setFocusedPane(projectPath: string, pane: 'agent' | 'shell' | null): void
   setActiveShellTab(projectPath: string, shellSession: number): void
   createShellTab(projectPath: string): void
   closeShellTab(projectPath: string, shellSession: number): void
@@ -85,6 +88,7 @@ function defaultTerminalState(launchTarget: LaunchTarget): ProjectTerminalState 
     activeShellTab: 0,
     nextShellSession: 1,
     activeTopTab: 'terminal',
+    focusedPane: null,
   }
 }
 
@@ -108,6 +112,7 @@ function normalizeTerminalState(
     activeShellTab,
     nextShellSession: Math.max(state?.nextShellSession ?? 0, maxShellSession + 1),
     activeTopTab: state?.activeTopTab ?? 'terminal',
+    focusedPane: (state as { focusedPane?: 'agent' | 'shell' | null })?.focusedPane ?? null,
     initialCommand: state?.initialCommand ?? undefined,
     customAgent: state?.customAgent,
   }
@@ -123,6 +128,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   selectedProjectPath: null,
   selectedProject: null,
+  previousProjectPath: null,
   launchedProjects: new Set(),
   terminalStates: {},
   claudeStatus: {},
@@ -149,12 +155,17 @@ export const useAppStore = create<AppState>((set, get) => ({
         Object.entries(state.shellStatus).filter(([projectPath]) => projectPaths.has(projectPath)),
       )
       const selectedProject = resolveSelectedProject(projects, state.selectedProjectPath)
-      return { projects, selectedProject, launchedProjects, terminalStates, claudeStatus, shellStatus }
+      const previousProjectPath = state.previousProjectPath && projectPaths.has(state.previousProjectPath) ? state.previousProjectPath : null
+      return { projects, selectedProject, previousProjectPath, launchedProjects, terminalStates, claudeStatus, shellStatus }
     })
   },
 
   selectProject(project) {
-    set({ selectedProjectPath: project.path, selectedProject: project })
+    set((state) => ({
+      previousProjectPath: state.selectedProjectPath,
+      selectedProjectPath: project.path,
+      selectedProject: project,
+    }))
   },
 
   launchProject(project, target) {
@@ -176,6 +187,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       terminalStates[project.path].launchTarget = target
       return {
         projects,
+        previousProjectPath: state.selectedProjectPath,
         selectedProjectPath: project.path,
         selectedProject: projects.find((p) => p.path === project.path) ?? { ...project, lastLaunched: now },
         launchedProjects,
@@ -266,6 +278,23 @@ export const useAppStore = create<AppState>((set, get) => ({
           [projectPath]: {
             ...normalized,
             activeTopTab: tab,
+          },
+        },
+      }
+    })
+  },
+
+  setFocusedPane(projectPath, pane) {
+    set((state) => {
+      const current = state.terminalStates[projectPath]
+      if (!current) return {}
+      const normalized = normalizeTerminalState(current, current.launchTarget)
+      return {
+        terminalStates: {
+          ...state.terminalStates,
+          [projectPath]: {
+            ...normalized,
+            focusedPane: pane,
           },
         },
       }
@@ -457,6 +486,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             activeShellTab: terminalState.activeShellTab,
             nextShellSession: terminalState.nextShellSession,
             activeTopTab: terminalState.activeTopTab,
+            focusedPane: terminalState.focusedPane,
           }
           if (terminalState.initialCommand) {
             snap.initialCommand = terminalState.initialCommand

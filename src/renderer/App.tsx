@@ -124,6 +124,7 @@ async function restoreBackendSessions(): Promise<void> {
       activeShellTab: shellTabs[0] ?? 0,
       nextShellSession: maxShell + 1,
       activeTopTab: 'terminal',
+      focusedPane: null,
     })
 
     if (!selectedProjectPath) {
@@ -274,6 +275,18 @@ export default function App() {
       const state = useAppStore.getState()
       const currentPath = state.selectedProject?.path
       if (!currentPath) return
+
+      // If we have a previous project that's launched and idle, toggle back
+      if (state.previousProjectPath && state.previousProjectPath !== currentPath) {
+        const prevProject = state.projects.find(p => p.path === state.previousProjectPath)
+        if (prevProject && state.launchedProjects.has(prevProject.path)) {
+          const isBusy = state.claudeStatus[prevProject.path] === 'working' || state.shellStatus[prevProject.path] === 'working'
+          if (!isBusy) {
+            state.selectProject(prevProject)
+            return
+          }
+        }
+      }
 
       for (const project of state.projects) {
         if (project.path === currentPath) continue

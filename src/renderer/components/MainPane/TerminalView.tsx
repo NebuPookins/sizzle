@@ -22,6 +22,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     unlaunchProject,
     terminalStates,
     setActiveTopTab,
+    setFocusedPane,
     setActiveShellTab,
     createShellTab,
     closeShellTab,
@@ -32,7 +33,6 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const [agentExited, setAgentExited] = useState(false)
   const [exitedShells, setExitedShells] = useState<number[]>([])
   const [shellActivity, setShellActivity] = useState<Record<number, 'working' | 'waiting'>>({})
-  const [focusedPane, setFocusedPane] = useState<'agent' | 'shell' | null>(null)
   const [markdownFiles, setMarkdownFiles] = useState<string[]>([])
   const [activeMarkdown, setActiveMarkdown] = useState<string | null>(null)
   const [githubUrl, setGithubUrl] = useState<string | null>(null)
@@ -41,6 +41,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
   const shellTabs = terminalState?.shellTabs ?? [0]
   const activeShellTab = terminalState?.activeShellTab ?? shellTabs[0]
   const activeTopTab = terminalState?.activeTopTab ?? 'terminal'
+  const focusedPane = terminalState?.focusedPane ?? null
   const nextShellSession = terminalState?.nextShellSession ?? 1
   const [shell, setShell] = useState<string | null>(null)
   const [agentArgs, setAgentArgs] = useState<string[] | null>(null)
@@ -49,6 +50,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     : launchTarget === 'custom' && terminalState?.customAgent
       ? { label: terminalState.customAgent.label, command: terminalState.customAgent.command, getArgs: async () => [] }
       : getAgent(launchTarget)
+  const agentRef = useRef<XtermPaneHandle>(null)
   const shellRefs = useRef<Map<number, XtermPaneHandle>>(new Map())
   const projectPathRef = useRef(projectPath)
   const mdEditorRef = useRef<RichMarkdownEditorHandle>(null)
@@ -71,6 +73,17 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
     setExitedShells([])
     setShellActivity({})
   }, [projectPath])
+
+  // When mounting this project's view, restore focus to the previously focused pane
+  useEffect(() => {
+    if (focusedPane === 'agent' && agentArgs !== null) {
+      const id = setTimeout(() => agentRef.current?.focus(), 0)
+      return () => clearTimeout(id)
+    } else if (focusedPane === 'shell' && shell !== null) {
+      const id = setTimeout(() => shellRefs.current.get(activeShellTab)?.focus(), 0)
+      return () => clearTimeout(id)
+    }
+  }, [projectPath, focusedPane, agentArgs, shell, activeShellTab])
 
   useEffect(() => {
     if (isShellOnly) {
@@ -359,6 +372,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
               transition: 'opacity 0.15s',
             }}>
               <XtermPane
+                ref={agentRef}
                 key={`agent-${agentSession}`}
                 id={`${launchTarget}-${projectPath}-${agentSession}`}
                 cwd={projectPath}
@@ -366,8 +380,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                 args={agentArgs}
                 onStatusChange={(status) => setClaudeStatus(projectPath, status)}
                 onExit={() => setAgentExited(true)}
-                onFocus={() => setFocusedPane('agent')}
-                onBlur={() => setFocusedPane((p) => p === 'agent' ? null : p)}
+                onFocus={() => setFocusedPane(projectPath, 'agent')}
               />
             </div>
           )}
@@ -610,8 +623,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
                   setExitedShells((current) => (current.includes(shellSession) ? current : [...current, shellSession]))
                   setShellActivity((current) => ({ ...current, [shellSession]: 'waiting' }))
                 }}
-                onFocus={() => setFocusedPane('shell')}
-                onBlur={() => setFocusedPane((p) => p === 'shell' ? null : p)}
+                onFocus={() => setFocusedPane(projectPath, 'shell')}
               />
             </div>
           )
