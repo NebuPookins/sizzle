@@ -25,6 +25,7 @@ turndown.use(gfm)
 
 export interface RichMarkdownEditorHandle {
   isDirty: () => boolean
+  focus: () => void
 }
 
 interface Props {
@@ -55,6 +56,7 @@ const RichMarkdownEditor = forwardRef<RichMarkdownEditorHandle, Props>(
     const lastSavedRef = useRef<string | null>(null)
     const isEditingRef = useRef(false)
     const initialLoadRef = useRef(false)
+    const viewRef = useRef<HTMLDivElement>(null)
 
     const editor = useEditor({
       extensions: [
@@ -81,7 +83,14 @@ const RichMarkdownEditor = forwardRef<RichMarkdownEditorHandle, Props>(
 
     useImperativeHandle(ref, () => ({
       isDirty: () => dirty,
-    }), [dirty])
+      focus: () => {
+        if (editor?.isEditable) {
+          editor.commands.focus()
+        } else {
+          viewRef.current?.focus()
+        }
+      },
+    }), [dirty, editor])
 
     // Reset dirty/error when content changes (new file)
     useEffect(() => {
@@ -162,7 +171,7 @@ const RichMarkdownEditor = forwardRef<RichMarkdownEditorHandle, Props>(
     // View mode
     if (!isEditing) {
       return (
-        <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div ref={viewRef} tabIndex={-1} style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', outline: 'none' }}>
           {content !== null && (
             <>
               <div className="markdown-body">

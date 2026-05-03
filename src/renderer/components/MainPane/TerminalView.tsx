@@ -63,6 +63,9 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       if (!window.confirm('You have unsaved changes. Discard them?')) return
     }
     setActiveTopTab(projectPath, tab)
+    if (tab === 'terminal') {
+      requestAnimationFrame(() => agentRef.current?.focus())
+    }
   }
   const activeShellExited = exitedShells.includes(activeShellTab)
 
@@ -206,6 +209,13 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       isMounted = false
     }
   }, [activeTopTab])
+
+  // Auto-focus the markdown editor when its content finishes loading
+  useEffect(() => {
+    if (activeTopTab === 'terminal' || activeTopTab === 'explorer' || activeTopTab === GITHUB_TAB_ID) return
+    if (activeMarkdown === null) return
+    mdEditorRef.current?.focus()
+  }, [activeTopTab, activeMarkdown])
 
   return (
     <div style={{
@@ -384,7 +394,9 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
               />
             </div>
           )}
-          <div style={{
+          <div
+            onMouseDown={() => setFocusedPane(projectPath, 'agent')}
+            style={{
             flex: 1,
             minHeight: 0,
             display: activeTopTab === 'terminal' ? 'none' : 'flex',

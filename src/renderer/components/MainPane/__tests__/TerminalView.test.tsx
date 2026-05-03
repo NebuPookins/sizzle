@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, act, cleanup } from '@testing-library/react'
+import { render, act, cleanup, screen, fireEvent } from '@testing-library/react'
 import TerminalView from '../TerminalView'
 import { useAppStore } from '../../../store/appStore'
 import type { LaunchTarget } from '../../../store/appStore'
@@ -201,5 +201,100 @@ describe('TerminalView', () => {
     expect(ptyKill).toHaveBeenCalledWith('claude-/projectA-0')
     expect(ptyKill).toHaveBeenCalledWith('shell-/projectA-0')
     expect(ptyKill).toHaveBeenCalledTimes(2)
+  })
+
+  it('sets focusedPane to agent when clicking non-terminal content after shell was focused', async () => {
+    useAppStore.setState({
+      launchedProjects: new Set(['/projectA']),
+      terminalStates: {
+        '/projectA': {
+          ...baseTerminalState,
+          launchTarget: 'claude',
+          focusedPane: 'shell',
+        },
+      },
+    })
+
+    const { getProjectDetail, readMarkdownFile } = await import('../../../api')
+    vi.mocked(getProjectDetail).mockResolvedValue({
+      markdownFiles: ['/projectA/README.md'],
+      githubUrl: null,
+    })
+    vi.mocked(readMarkdownFile).mockResolvedValue('# Content')
+
+    render(<TerminalView projectPath="/projectA" launchTarget="claude" />)
+    await flushMicrotasks()
+
+    // Switch to the markdown tab
+    act(() => {
+      useAppStore.getState().setActiveTopTab('/projectA', '/projectA/README.md')
+    })
+    await flushMicrotasks()
+
+    // Click an element inside the non-terminal content area — event bubbles to wrapper
+    fireEvent.mouseDown(screen.getByText('Edit'))
+
+    expect(useAppStore.getState().terminalStates['/projectA'].focusedPane).toBe('agent')
+  })
+
+  it('switches to the terminal tab and calls requestAnimationFrame when clicking the Terminal tab', async () => {
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame')
+
+    useAppStore.setState({
+      launchedProjects: new Set(['/projectA']),
+      terminalStates: {
+        '/projectA': {
+          ...baseTerminalState,
+          launchTarget: 'claude',
+          activeTopTab: '/projectA/README.md',
+        },
+      },
+    })
+
+    const { getProjectDetail } = await import('../../../api')
+    vi.mocked(getProjectDetail).mockResolvedValue({
+      markdownFiles: ['/projectA/README.md'],
+      githubUrl: null,
+    })
+
+    render(<TerminalView projectPath="/projectA" launchTarget="claude" />)
+    await flushMicrotasks()
+
+    // Click the "Terminal" tab button
+    fireEvent.click(screen.getByText('Terminal'))
+
+    expect(useAppStore.getState().terminalStates['/projectA'].activeTopTab).toBe('terminal')
+    expect(rafSpy).toHaveBeenCalledTimes(1)
+
+    rafSpy.mockRestore()
+  })
+
+  it('focuses the markdown editor when switching to a markdown tab', async () => {
+    useAppStore.setState({
+      launchedProjects: new Set(['/projectA']),
+      terminalStates: {
+        '/projectA': { ...baseTerminalState, launchTarget: 'claude' },
+      },
+    })
+
+    const { getProjectDetail } = await import('../../../api')
+    vi.mocked(getProjectDetail).mockResolvedValue({
+      markdownFiles: ['/projectA/README.md'],
+      githubUrl: null,
+    })
+
+    render(<TerminalView projectPath="/projectA" launchTarget="claude" />)
+    await flushMicrotasks()
+
+    // Switch to the markdown tab
+    act(() => {
+      useAppStore.getState().setActiveTopTab('/projectA', '/projectA/README.md')
+    })
+    await flushMicrotasks()
+
+    // The markdown editor's view container (tabIndex=-1) should have received focus
+    const editButton = screen.getByText('Edit')
+    const container = editButton.closest('[tabindex="-1"]')
+    expect(document.activeElement).toBe(container)
   })
 })
