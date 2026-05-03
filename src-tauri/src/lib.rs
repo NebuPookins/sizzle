@@ -46,6 +46,7 @@ pub fn run() {
             commands::get_markdown_files,
             commands::get_project_detail,
             commands::read_markdown_file,
+            commands::write_markdown_file,
             commands::list_directory,
             commands::preview_file,
             commands::get_project_repository_info,

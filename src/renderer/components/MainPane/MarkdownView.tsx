@@ -1,12 +1,12 @@
-import { useState, useEffect } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
+import { useState, useEffect, useRef } from 'react'
 import { LaunchTarget, Project, useAppStore } from '../../store/appStore'
 import FileExplorerPane from './FileExplorerPane'
+import RichMarkdownEditor from './RichMarkdownEditor'
+import type { RichMarkdownEditorHandle } from './RichMarkdownEditor'
 import {
   getProjectDetail,
   readMarkdownFile,
+  writeMarkdownFile,
   setLastLaunched,
   setTagOverride,
   rescanProjectTags,
@@ -28,6 +28,14 @@ export default function MarkdownView({ project }: Props) {
   const [tagInput, setTagInput] = useState('')
   const [primaryTagInput, setPrimaryTagInput] = useState('')
   const { launchProject, setProjectTagOverride, setProjectDetectedTags, setCustomAgentInfo, agentPresets, hasClaude, hasCodex } = useAppStore()
+  const editorRef = useRef<RichMarkdownEditorHandle>(null)
+
+  function handleTabSwitch(file: string | 'explorer' | typeof GITHUB_TAB_ID | null) {
+    if (editorRef.current?.isDirty()) {
+      if (!window.confirm('You have unsaved changes. Discard them?')) return
+    }
+    setActiveFile(file)
+  }
 
   useEffect(() => {
     setFiles([])
@@ -398,7 +406,7 @@ export default function MarkdownView({ project }: Props) {
         {files.map((f) => (
           <button
             key={f}
-            onClick={() => setActiveFile(f)}
+            onClick={() => handleTabSwitch(f)}
             style={{
               background: 'none',
               border: 'none',
@@ -416,7 +424,7 @@ export default function MarkdownView({ project }: Props) {
         ))}
         {githubUrl && (
           <button
-            onClick={() => setActiveFile(GITHUB_TAB_ID)}
+            onClick={() => handleTabSwitch(GITHUB_TAB_ID)}
             style={{
               background: 'none',
               border: 'none',
@@ -433,7 +441,7 @@ export default function MarkdownView({ project }: Props) {
           </button>
         )}
         <button
-          onClick={() => setActiveFile('explorer')}
+          onClick={() => handleTabSwitch('explorer')}
           style={{
             background: 'none',
             border: 'none',
@@ -480,11 +488,15 @@ export default function MarkdownView({ project }: Props) {
           <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
         )}
         {activeFile !== 'explorer' && activeFile !== GITHUB_TAB_ID && content !== null && (
-          <div className="markdown-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-              {content}
-            </ReactMarkdown>
-          </div>
+          <RichMarkdownEditor
+            ref={editorRef}
+            filePath={activeFile}
+            content={content}
+            onSave={async (filePath, newContent) => {
+              await writeMarkdownFile(filePath, newContent)
+              setContent(newContent)
+            }}
+          />
         )}
         {files.length === 0 && !githubUrl && content === null && activeFile !== 'explorer' && (
           <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>

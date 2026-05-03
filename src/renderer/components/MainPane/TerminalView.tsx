@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
 import { useAppStore } from '../../store/appStore'
 import type { LaunchTarget } from '../../store/appStore'
 import { getAgent } from '../../agents'
 import XtermPane, { type XtermPaneHandle } from './XtermPane'
 import FileExplorerPane from './FileExplorerPane'
-import { getDefaultShell, getProjectDetail, readMarkdownFile, ptyKill } from '../../api'
+import RichMarkdownEditor from './RichMarkdownEditor'
+import type { RichMarkdownEditorHandle } from './RichMarkdownEditor'
+import { getDefaultShell, getProjectDetail, readMarkdownFile, writeMarkdownFile, ptyKill } from '../../api'
 
 interface Props {
   projectPath: string
@@ -52,9 +51,17 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
       : getAgent(launchTarget)
   const shellRefs = useRef<Map<number, XtermPaneHandle>>(new Map())
   const projectPathRef = useRef(projectPath)
+  const mdEditorRef = useRef<RichMarkdownEditorHandle>(null)
   projectPathRef.current = projectPath
   const tabName = (filePath: string) => filePath.split('/').pop() ?? filePath
   const allShellsExited = shellTabs.length > 0 && shellTabs.every((shellSession) => exitedShells.includes(shellSession))
+
+  function handleTopTabSwitch(tab: string) {
+    if (mdEditorRef.current?.isDirty()) {
+      if (!window.confirm('You have unsaved changes. Discard them?')) return
+    }
+    setActiveTopTab(projectPath, tab)
+  }
   const activeShellExited = exitedShells.includes(activeShellTab)
 
   // Reset component-local state when switching to a different project,
@@ -220,7 +227,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
           </div>
           <div style={{ display: 'flex', alignItems: 'stretch', minWidth: 0, overflowX: 'auto' }}>
             <button
-              onClick={() => setActiveTopTab(projectPath, 'terminal')}
+              onClick={() => handleTopTabSwitch('terminal')}
               style={{
                 border: 'none',
                 borderBottom: activeTopTab === 'terminal' ? '2px solid var(--accent)' : '2px solid transparent',
@@ -240,7 +247,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             {markdownFiles.map((file) => (
               <button
                 key={file}
-                onClick={() => setActiveTopTab(projectPath, file)}
+                onClick={() => handleTopTabSwitch(file)}
                 style={{
                   border: 'none',
                   borderBottom: activeTopTab === file ? '2px solid var(--accent)' : '2px solid transparent',
@@ -258,7 +265,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
             ))}
             {githubUrl && (
               <button
-                onClick={() => setActiveTopTab(projectPath, GITHUB_TAB_ID)}
+                onClick={() => handleTopTabSwitch(GITHUB_TAB_ID)}
                 style={{
                   border: 'none',
                   borderBottom: activeTopTab === GITHUB_TAB_ID ? '2px solid var(--accent)' : '2px solid transparent',
@@ -275,7 +282,7 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
               </button>
             )}
             <button
-              onClick={() => setActiveTopTab(projectPath, 'explorer')}
+              onClick={() => handleTopTabSwitch('explorer')}
               style={{
                 border: 'none',
                 borderBottom: activeTopTab === 'explorer' ? '2px solid var(--accent)' : '2px solid transparent',
@@ -403,11 +410,15 @@ export default function TerminalView({ projectPath, launchTarget }: Props) {
               <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
             )}
             {activeTopTab !== 'explorer' && activeTopTab !== GITHUB_TAB_ID && activeMarkdown !== null && (
-              <div className="markdown-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {activeMarkdown}
-                </ReactMarkdown>
-              </div>
+              <RichMarkdownEditor
+                ref={mdEditorRef}
+                filePath={activeTopTab}
+                content={activeMarkdown}
+                onSave={async (filePath, newContent) => {
+                  await writeMarkdownFile(filePath, newContent)
+                  setActiveMarkdown(newContent)
+                }}
+              />
             )}
           </div>
         </>

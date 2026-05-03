@@ -6,9 +6,15 @@ import GitStatusPane from './components/GitStatusPane/GitStatusPane'
 import type { ProjectTag } from './api'
 import { scanProjects, getAllMetadata, getAgentPresets, commandExists, consumeReloadSnapshot, setWindowTitle, ptyListSessions, getApiManifest } from './api'
 import type { LaunchTarget, ReloadSnapshot } from '../shared/reload'
-import { API_MANIFEST } from 'virtual:api-manifest'
+import { COMMANDS, EVENTS } from '../shared/api-definitions'
 import { diffManifests, type ManifestDiff } from './diffManifests'
 import ApiMismatchBanner from './ApiMismatchBanner'
+
+const API_MANIFEST = {
+  format: 1,
+  commands: Object.values(COMMANDS).map((cmd) => ({ name: cmd.name, args: cmd.params })),
+  events: Object.values(EVENTS).map((evt) => ({ name: evt.name })),
+}
 
 const PROJECT_REFRESH_INTERVAL_MS = 10_000
 
@@ -201,12 +207,19 @@ export default function App() {
     // Check API sync
     getApiManifest()
       .then((backend) => {
+        const frontendNames = API_MANIFEST.commands.map(c => c.name).sort()
+        const backendNames = backend.commands.map(c => c.name).sort()
+        console.log('[api-sync] frontend commands:', frontendNames)
+        console.log('[api-sync] backend  commands:', backendNames)
+
         const d = diffManifests(API_MANIFEST, backend)
+        console.log('[api-sync] diff:', JSON.stringify(d))
         if (d.missing.length > 0 || d.changed.length > 0) {
           setApiDiff(d)
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error('[api-sync] getApiManifest failed:', err)
         // Can't reach backend at all — treat as mismatch
         setApiDiff({
           missing: [{ name: '(backend unreachable)', kind: 'missing', frontendArgs: [] }],

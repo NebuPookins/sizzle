@@ -146,3 +146,269 @@ html, body, #root {
   border-top: 1px solid var(--border);
   margin: 1.2em 0;
 }
+
+/* ── Rich Text Editor ── */
+
+.rich-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+}
+
+/* Toolbar */
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.editor-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  transition: background 0.1s, color 0.1s;
+}
+
+.editor-toolbar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.editor-toolbar-btn.is-active {
+  background: var(--bg-selected);
+  color: var(--accent);
+}
+
+.editor-toolbar-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* ProseMirror editing area */
+.editor-content-area {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+.editor-content-area .ProseMirror {
+  outline: none;
+  min-height: 100%;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.editor-content-area .ProseMirror p {
+  margin: 0.6em 0;
+}
+
+.editor-content-area .ProseMirror h1,
+.editor-content-area .ProseMirror h2,
+.editor-content-area .ProseMirror h3,
+.editor-content-area .ProseMirror h4,
+.editor-content-area .ProseMirror h5,
+.editor-content-area .ProseMirror h6 {
+  margin: 1.2em 0 0.4em;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.editor-content-area .ProseMirror h1 { font-size: 1.8em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.editor-content-area .ProseMirror h2 { font-size: 1.4em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+.editor-content-area .ProseMirror h3 { font-size: 1.15em; }
+
+.editor-content-area .ProseMirror code {
+  background: #1e1e3a;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.85em;
+  color: #c9b1ff;
+}
+
+.editor-content-area .ProseMirror pre {
+  background: #1e1e3a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1em;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+
+.editor-content-area .ProseMirror pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.88em;
+  color: var(--text-primary);
+}
+
+.editor-content-area .ProseMirror a {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.editor-content-area .ProseMirror a:hover {
+  text-decoration: underline;
+}
+
+.editor-content-area .ProseMirror ul,
+.editor-content-area .ProseMirror ol {
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.editor-content-area .ProseMirror li {
+  margin: 0.2em 0;
+}
+
+.editor-content-area .ProseMirror blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 1em;
+  color: var(--text-secondary);
+  margin: 0.8em 0;
+}
+
+.editor-content-area .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.2em 0;
+}
+
+/* Task list in editor */
+.editor-content-area .ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.editor-content-area .ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+}
+
+.editor-content-area .ProseMirror ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  margin-top: 0.2em;
+  cursor: pointer;
+}
+
+.editor-content-area .ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.editor-content-area .ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div > p {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+/* Placeholder */
+.editor-content-area .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+/* Selection */
+.editor-content-area .ProseMirror ::selection {
+  background: rgba(124, 106, 247, 0.3);
+}
+
+/* Save/cancel bar */
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+.editor-actions .dirty-indicator {
+  font-size: 11px;
+  color: var(--amber);
+}
+
+.editor-actions .error-text {
+  font-size: 11px;
+  color: var(--red);
+}
+
+.editor-save-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  line-height: 1.6;
+}
+
+.editor-save-btn:hover {
+  background: var(--accent-hover);
+}
+
+.editor-save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.editor-cancel-btn {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 14px;
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1.6;
+}
+
+.editor-cancel-btn:hover {
+  color: var(--text-primary);
+}
+
+/* Edit button (shown in view mode) */
+.editor-edit-btn {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 1;
+  line-height: 1.6;
+}
+
+.editor-edit-btn:hover {
+  background: var(--bg-selected);
+}

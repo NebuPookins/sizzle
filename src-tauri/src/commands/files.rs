@@ -415,6 +415,11 @@ pub fn read_markdown_file(file_path: String) -> Option<String> {
     fs::read_to_string(&file_path).ok()
 }
 
+#[tauri::command]
+pub fn write_markdown_file(file_path: String, content: String) -> Result<(), String> {
+    fs::write(&file_path, &content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectDetail {

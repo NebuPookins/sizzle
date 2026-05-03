@@ -76,6 +76,9 @@ export const getProjectDetail = (projectPath: string): Promise<{ markdownFiles: 
 export const readMarkdownFile = (filePath: string): Promise<string | null> =>
   COMMANDS.read_markdown_file.invoke(filePath)
 
+export const writeMarkdownFile = (filePath: string, content: string): Promise<null> =>
+  COMMANDS.write_markdown_file.invoke(filePath, content)
+
 export const listDirectory = (projectPath: string, directoryPath?: string): Promise<FileSystemEntry[]> =>
   COMMANDS.list_directory.invoke(projectPath, directoryPath)
 

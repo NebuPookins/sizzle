@@ -169,6 +169,12 @@ export const COMMANDS = {
     invoke: (filePath: string) => invoke<string | null>('read_markdown_file', { filePath }),
   },
 
+  write_markdown_file: {
+    name: 'write_markdown_file' as const,
+    params: ['filePath', 'content'] as const,
+    invoke: (filePath: string, content: string) => invoke<null>('write_markdown_file', { filePath, content }),
+  },
+
   list_directory: {
     name: 'list_directory' as const,
     params: ['projectPath', 'directoryPath'] as const,
