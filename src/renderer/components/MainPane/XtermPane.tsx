@@ -22,6 +22,47 @@ export interface XtermPaneHandle {
   focus: () => void
 }
 
+/** Strip known terminal responses and cosmetic escape sequences that some shells/tools
+    emit as visible garbage (especially during history replay). These are safe to remove:
+    - OSC 10/11/12 (dynamic fg/bg/cursor color) — cosmetic color updates
+    - Device Attribute responses (\x1b[?1;2c, \x1b[>...c) — terminal identity responses
+    - Cursor Position Reports (\x1b[...R) — responses to cursor position queries
+    When `alsoRequests` is true (replay mode), also strip DA and CPR *requests*
+    (\x1b[c, \x1b[0c, \x1b[6n) — these are stale during replay and would cause
+    xterm.js to generate new responses that echo back as garbage. */
+function stripTerminalResponses(s: string, alsoRequests = false): string {
+  let result = s.replace(
+    /\x1b\](?:10|11|12)[^\x1b\x07]*(?:\x1b\\|\x07)|\x1b\[\?(?:\d+;)*\d+c|\x1b\[[\d;]+R|\x1b\[>\d+;\d+(?:;\d+)*c/g,
+    '',
+  )
+  if (alsoRequests) {
+    // Strip DA requests (\x1b[c, \x1b[0c, etc) and CPR requests (\x1b[6n)
+    result = result.replace(/\x1b\[[\d;]*[cn]/g, '')
+  }
+  return result
+}
+
+/** When the history buffer is trimmed from the front by trim_front_to (Rust),
+    escape sequences can be split at the trim point. The tail of a split sequence
+    at the start of replay has no leading \x1b and xterm.js renders it as literal
+    text. Strip any leading content that looks like escape-sequence debris. */
+function stripLeadingTrimDebris(s: string): string {
+  // Characters that strongly suggest we landed mid-escape-sequence
+  if (/^[\]\[#%()*+=>?;]/.test(s)) {
+    const idx = s.indexOf('\x1b')
+    if (idx > 0) return s.slice(idx)
+    // No \x1b found — entire string might be garbage; keep as-is but
+    // strip leading bracket chars that are clearly sequence debris
+    return s.replace(/^[\[\]]#?/, '')
+  }
+  // Leading digits + semicolon: likely CSI parameter debris
+  if (/^\d+[;]/.test(s)) {
+    const idx = s.indexOf('\x1b')
+    if (idx > 0) return s.slice(idx)
+  }
+  return s
+}
+
 const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
   id,
   cwd,
@@ -104,7 +145,8 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
 
     const ptyDataUnsub = onPtyData((ptyId, data) => {
       if (ptyId !== id || !replayWrittenRef.current || !termRef.current) return
-      term.write(data)
+      const stripped = stripTerminalResponses(data)
+      term.write(stripped)
 
       if (onStatusChange) {
         if (currentStatus !== 'working') {
@@ -128,8 +170,11 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
       }
     })
 
-    // Send keyboard input to PTY
+    // Send keyboard input to PTY, but suppress terminal DA/CPR responses
+    // during replay — they're stale and would echo back as visible garbage
     const disposeOnData = term.onData((data) => {
+      if (!replayWrittenRef.current && /^\x1b\[\?(?:\d+;)*\d+c$/.test(data)) return
+      if (!replayWrittenRef.current && /^\x1b\[[\d;]+R$/.test(data)) return
       ptyWrite(id, data)
     })
 
@@ -152,7 +197,11 @@ const XtermPane = forwardRef<XtermPaneHandle, Props>(function XtermPane({
       fitAddon.fit()
       ptyCreate(id, cwd, command, args).then(({ replay, exitCode }) => {
         if (termRef.current !== term) return
-        if (replay) term.write(replay)
+        if (replay) {
+          let cleanReplay = stripLeadingTrimDebris(replay)
+          cleanReplay = stripTerminalResponses(cleanReplay, true)
+          term.write(cleanReplay)
+        }
         replayWrittenRef.current = true
         if (exitCode !== null) {
           onExitRef.current?.()
