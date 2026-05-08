@@ -2,11 +2,18 @@ use portable_pty::{ChildKiller, MasterPty, PtySize, native_pty_system, CommandBu
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 const HISTORY_LIMIT: usize = 200_000;
+const READ_BUFFER_SIZE: usize = 64 * 1024;
+const EMIT_INTERVAL_MS: u64 = 16;
+const EMIT_QUEUE_CHUNKS: usize = 4;
+const MAX_EMIT_BATCH_BYTES: usize = 64 * 1024;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +42,7 @@ pub(crate) struct PtySession {
     master_pty: Box<dyn MasterPty + Send>,
     history: Arc<Mutex<String>>,
     exit_code: Arc<Mutex<Option<i32>>>,
+    attached: Arc<AtomicBool>,
 }
 
 pub struct PtyRegistry {
@@ -55,6 +63,7 @@ impl PtyRegistry {
         app_handle: AppHandle,
     ) -> PtyCreateResult {
         if let Some(existing) = self.ptys.get(id) {
+            existing.attached.store(true, Ordering::Release);
             let replay = existing.history.lock().unwrap().clone();
             let exit_code = *existing.exit_code.lock().unwrap();
             return PtyCreateResult {
@@ -118,6 +127,7 @@ impl PtyRegistry {
 
         let history = Arc::new(Mutex::new(String::new()));
         let exit_code = Arc::new(Mutex::new(None));
+        let attached = Arc::new(AtomicBool::new(true));
 
         let session = PtySession {
             writer,
@@ -125,6 +135,7 @@ impl PtyRegistry {
             master_pty: pair.master,
             history: history.clone(),
             exit_code: exit_code.clone(),
+            attached: attached.clone(),
         };
 
         self.ptys.insert(id.to_string(), session);
@@ -140,8 +151,16 @@ impl PtyRegistry {
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                 move || {
+                    let (output_tx, output_rx) = sync_channel::<String>(EMIT_QUEUE_CHUNKS);
+                    let emit_app = app_clone.clone();
+                    let emit_id = id_clone.clone();
+                    let emit_attached = attached.clone();
+                    let emitter = thread::spawn(move || {
+                        emit_pty_data(emit_app, emit_id, emit_attached, output_rx);
+                    });
+
                     let mut reader = reader;
-                    let mut buf = [0u8; 4096];
+                    let mut buf = [0u8; READ_BUFFER_SIZE];
 
                     loop {
                         let n = match reader.read(&mut buf) {
@@ -159,12 +178,17 @@ impl PtyRegistry {
                             trim_front_to(&mut hist, HISTORY_LIMIT);
                         }
 
-                        let payload =
-                            PtyDataEvent { id: id_clone.clone(), data };
-                        if app_clone.emit("pty:data", payload).is_err() {
+                        if !attached.load(Ordering::Acquire) {
+                            continue;
+                        }
+
+                        if output_tx.send(data).is_err() {
                             break;
                         }
                     }
+
+                    drop(output_tx);
+                    let _ = emitter.join();
                 },
             ));
 
@@ -203,7 +227,10 @@ impl PtyRegistry {
         }
     }
 
-    pub fn detach(&mut self, _id: &str) -> Result<(), String> {
+    pub fn detach(&mut self, id: &str) -> Result<(), String> {
+        if let Some(session) = self.ptys.get(id) {
+            session.attached.store(false, Ordering::Release);
+        }
         Ok(())
     }
 
@@ -216,6 +243,91 @@ impl PtyRegistry {
             None => Err(format!("PTY {} not found", id)),
         }
     }
+}
+
+fn emit_pty_data(app_handle: AppHandle, id: String, attached: Arc<AtomicBool>, rx: Receiver<String>) {
+    let emit_interval = Duration::from_millis(EMIT_INTERVAL_MS);
+    let mut pending = String::new();
+    let mut dropped_bytes = 0usize;
+    let mut next_emit = Instant::now() + emit_interval;
+
+    loop {
+        let timeout = next_emit.saturating_duration_since(Instant::now());
+        let disconnected = match rx.recv_timeout(timeout) {
+            Ok(data) => {
+                append_to_emit_buffer(&mut pending, &mut dropped_bytes, &data);
+                false
+            }
+            Err(RecvTimeoutError::Timeout) => false,
+            Err(RecvTimeoutError::Disconnected) => true,
+        };
+
+        for _ in 0..EMIT_QUEUE_CHUNKS {
+            match rx.try_recv() {
+                Ok(data) => append_to_emit_buffer(&mut pending, &mut dropped_bytes, &data),
+                Err(_) => break,
+            }
+        }
+
+        if disconnected || Instant::now() >= next_emit {
+            if !flush_emit_buffer(&app_handle, &id, &attached, &mut pending, &mut dropped_bytes) {
+                break;
+            }
+            next_emit = Instant::now() + emit_interval;
+        }
+
+        if disconnected {
+            break;
+        }
+    }
+}
+
+fn append_to_emit_buffer(pending: &mut String, dropped_bytes: &mut usize, data: &str) {
+    pending.push_str(data);
+    if pending.len() > MAX_EMIT_BATCH_BYTES {
+        let before = pending.len();
+        trim_front_to(pending, MAX_EMIT_BATCH_BYTES);
+        *dropped_bytes += before.saturating_sub(pending.len());
+    }
+}
+
+fn flush_emit_buffer(
+    app_handle: &AppHandle,
+    id: &str,
+    attached: &AtomicBool,
+    pending: &mut String,
+    dropped_bytes: &mut usize,
+) -> bool {
+    if !attached.load(Ordering::Acquire) {
+        pending.clear();
+        *dropped_bytes = 0;
+        return true;
+    }
+
+    if pending.is_empty() && *dropped_bytes == 0 {
+        return true;
+    }
+
+    let mut data = String::new();
+    if *dropped_bytes > 0 {
+        data.push_str(&format!(
+            "\r\n\x1b[33m[sizzle skipped {} bytes of terminal output]\x1b[0m\r\n",
+            *dropped_bytes
+        ));
+        *dropped_bytes = 0;
+    }
+    data.push_str(pending);
+    pending.clear();
+
+    app_handle
+        .emit(
+            "pty:data",
+            PtyDataEvent {
+                id: id.to_string(),
+                data,
+            },
+        )
+        .is_ok()
 }
 
 /// Trims the front of a string so it's at most `limit` bytes,
@@ -429,5 +541,31 @@ mod tests {
             panic!("simulated panic");
         }));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn append_to_emit_buffer_keeps_recent_output_under_cap() {
+        let mut pending = "old".repeat(MAX_EMIT_BATCH_BYTES / 3).to_string();
+        let mut dropped = 0usize;
+        let newest = "new-data";
+
+        append_to_emit_buffer(&mut pending, &mut dropped, newest);
+
+        assert!(pending.len() <= MAX_EMIT_BATCH_BYTES);
+        assert!(pending.ends_with(newest));
+        assert!(dropped > 0);
+    }
+
+    #[test]
+    fn append_to_emit_buffer_tracks_multibyte_trims_without_panicking() {
+        let mut pending = "€".repeat((MAX_EMIT_BATCH_BYTES / 3) + 10);
+        let mut dropped = 0usize;
+
+        append_to_emit_buffer(&mut pending, &mut dropped, "tail");
+
+        assert!(pending.len() <= MAX_EMIT_BATCH_BYTES + 3);
+        assert!(pending.ends_with("tail"));
+        assert!(pending.is_char_boundary(0));
+        assert!(dropped > 0);
     }
 }
