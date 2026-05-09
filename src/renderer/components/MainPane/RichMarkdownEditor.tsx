@@ -171,14 +171,9 @@ const RichMarkdownEditor = forwardRef<RichMarkdownEditorHandle, Props>(
     // View mode
     if (!isEditing) {
       return (
-        <div ref={viewRef} tabIndex={-1} style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', outline: 'none' }}>
+        <div ref={viewRef} tabIndex={-1} style={{ position: 'relative', display: 'flex', flexDirection: 'column', outline: 'none' }}>
           {content !== null && (
             <>
-              <div className="markdown-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {content}
-                </ReactMarkdown>
-              </div>
               <button
                 onClick={() => setIsEditing(true)}
                 className="editor-edit-btn"
@@ -186,6 +181,11 @@ const RichMarkdownEditor = forwardRef<RichMarkdownEditorHandle, Props>(
               >
                 Edit
               </button>
+              <div className="markdown-body">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                  {content}
+                </ReactMarkdown>
+              </div>
             </>
           )}
         </div>

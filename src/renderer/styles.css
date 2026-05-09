@@ -394,9 +394,9 @@ html, body, #root {
 
 /* Edit button (shown in view mode) */
 .editor-edit-btn {
-  position: absolute;
+  position: sticky;
   top: 10px;
-  right: 16px;
+  align-self: flex-end;
   background: var(--bg-hover);
   color: var(--text-primary);
   border: 1px solid var(--border);
