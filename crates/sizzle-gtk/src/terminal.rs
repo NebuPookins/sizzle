@@ -99,6 +99,7 @@ impl TerminalWidget {
         widget.setup_draw();
         widget.setup_keyboard();
         widget.setup_context_menu();
+        widget.setup_click_to_focus();
         widget.setup_redraw_timer();
         widget.setup_resize();
         widget
@@ -162,6 +163,15 @@ impl TerminalWidget {
             popover.set_child(Some(&vbox));
             popover.set_parent(&da);
             popover.popup();
+        });
+        self.da.add_controller(gesture);
+    }
+
+    fn setup_click_to_focus(&self) {
+        let da = self.da.clone();
+        let gesture = GestureClick::new();
+        gesture.connect_pressed(move |_, _, _, _| {
+            da.grab_focus();
         });
         self.da.add_controller(gesture);
     }

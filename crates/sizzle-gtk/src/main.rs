@@ -11,8 +11,8 @@ use std::time::Duration;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, Entry, FlowBox,
-    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
+    Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar,
+    Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
     ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
 };
 
@@ -359,24 +359,21 @@ fn populate_list(state: &State) {
 fn select_project(state: &State, path: &str) {
     let path = path.to_string();
 
-    let project = {
+    let found = {
         let st = state.borrow();
-        st.projects.iter().find(|p| p.path == path).cloned()
+        st.projects.iter().any(|p| p.path == path)
     };
-    let Some(project) = project else { return };
+    if !found { return; }
 
     {
         let mut st = state.borrow_mut();
         if !st.project_widgets.contains_key(&path) {
             let presets = st.store.get_agent_presets();
 
-            // ── Notebook with overview + markdown + explorer tabs ──────────
+            // ── Notebook with markdown + explorer tabs ────────────────────
             let notebook = Notebook::new();
             notebook.set_hexpand(true);
             notebook.set_vexpand(true);
-
-            let overview = build_overview_tab(&project);
-            notebook.append_page(&overview, Some(&Label::new(Some("Overview"))));
 
             let md_files = sizzle_core::files::get_markdown_files(path.clone());
             for md_path in &md_files {
@@ -395,6 +392,9 @@ fn select_project(state: &State, path: &str) {
 
             let explorer = build_explorer_tab(&path);
             notebook.append_page(&explorer, Some(&Label::new(Some("Explorer"))));
+
+            // Open to first markdown tab; fall back to Explorer
+            notebook.set_current_page(Some(0));
 
             // ── Launch buttons ─────────────────────────────────────────────
             let btn_box = GtkBox::new(Orientation::Horizontal, 4);
@@ -484,43 +484,6 @@ fn select_project(state: &State, path: &str) {
         }
         st.store.set_last_launched(&path);
     }
-}
-
-// ── Overview tab ──────────────────────────────────────────────────────────
-
-fn build_overview_tab(project: &ScannedProject) -> ScrolledWindow {
-    let flow = FlowBox::new();
-    flow.set_selection_mode(gtk4::SelectionMode::None);
-    flow.set_column_spacing(6);
-    flow.set_row_spacing(6);
-    flow.set_margin_start(12);
-    flow.set_margin_top(12);
-    flow.set_margin_end(12);
-    flow.set_margin_bottom(12);
-
-    if project.detected_tags.is_empty() {
-        let lbl = Label::new(Some("No tags detected."));
-        flow.insert(&lbl, -1);
-    } else {
-        for tag in &project.detected_tags {
-            let chip = Label::builder()
-                .label(&format!("{} ({:.0})", tag.name, tag.score))
-                .margin_start(10)
-                .margin_end(10)
-                .margin_top(5)
-                .margin_bottom(5)
-                .build();
-            flow.insert(&chip, -1);
-        }
-    }
-
-    ScrolledWindow::builder()
-        .hscrollbar_policy(gtk4::PolicyType::Never)
-        .vscrollbar_policy(gtk4::PolicyType::Automatic)
-        .hexpand(true)
-        .vexpand(true)
-        .child(&flow)
-        .build()
 }
 
 // ── Explorer tab ──────────────────────────────────────────────────────────
