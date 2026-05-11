@@ -29,42 +29,51 @@ Sizzle is open source and usable now, but it is still early-stage and developer-
 
 ## Requirements
 
-- **Rust toolchain** — needed to compile the Tauri backend (install via [rustup](https://rustup.rs/))
-- **Node.js** and **npm** — for the frontend build
-- A working desktop environment (X11/Wayland on Linux, native on macOS/Windows)
+- **Rust toolchain** — install via [rustup](https://rustup.rs/)
+- **GTK4 development libraries** (Linux only for now)
 - A supported shell on your system
 - `claude` and/or `codex` installed on your `PATH` if you want to launch those agents from inside the app
 
-Platform-specific Tauri prerequisites (system libraries, WebView2, etc.):
-- Linux: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev`
-- macOS: included with Xcode
-- Windows: included with WebView2 (pre-installed on Windows 10 1803+)
+On Debian/Ubuntu:
 
-See the [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/) for details.
+```bash
+sudo apt install libgtk-4-dev
+```
+
+On Fedora:
+
+```bash
+sudo dnf install gtk4-devel
+```
+
+On Arch:
+
+```bash
+sudo pacman -S gtk4
+```
 
 ## Install
 
 ```bash
 git clone https://github.com/NebuPookins/sizzle.git
 cd sizzle
-npm install
 ```
 
 ## Run In Development
 
 ```bash
-npm run dev
+cargo run -p sizzle-gtk
 ```
 
-This starts the Vite dev server and launches the Tauri desktop window. On first launch, Sizzle will ask you to choose the root directory it should scan for projects.
+On first launch, Sizzle will ask you to choose the root directory it should scan for projects.
 
 ## Build
 
 ```bash
-npm run build
+cargo build --release -p sizzle-gtk
 ```
 
-This produces the Tauri app bundles (`.deb`, `.AppImage`, `.dmg`, `.msi`, etc.) in `src-tauri/target/release/bundle/`.
+The binary will be at `target/release/sizzle-gtk`.
 
 ## Config Storage
 

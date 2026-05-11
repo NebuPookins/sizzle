@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/sizzle-core",
+    "crates/sizzle-gtk",
+    "term-proto",
+]
+resolver = "2"
