@@ -11,9 +11,9 @@ use std::time::Duration;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar,
-    Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, ScrolledWindow,
-    Stack, StackTransitionType, TextView, WrapMode,
+    Application, ApplicationWindow, Box as GtkBox, Button, Entry, FlowBox,
+    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
+    ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
 };
 
 use sizzle_core::{MetadataStore, ScannedProject, scan_projects};
@@ -21,9 +21,6 @@ use sizzle_core::{MetadataStore, ScannedProject, scan_projects};
 // ── App state ─────────────────────────────────────────────────────────────
 
 struct ProjectWidgets {
-    agent: terminal::TerminalWidget,
-    #[allow(dead_code)]
-    shell: terminal::TerminalWidget,
     git_view: TextView,
 }
 
@@ -72,12 +69,10 @@ fn build_ui(app: &Application) {
         scan_projects(&settings)
     };
 
-    // ── Header bar ─────────────────────────────────────────────────────────
     let header = HeaderBar::new();
     let mem_label = Label::new(Some("Mem: –"));
     header.pack_end(&mem_label);
 
-    // ── Left pane ──────────────────────────────────────────────────────────
     let search = Entry::builder()
         .placeholder_text("Search projects…")
         .margin_start(6).margin_end(6).margin_top(6).margin_bottom(4)
@@ -94,8 +89,10 @@ fn build_ui(app: &Application) {
     scroll.set_child(Some(&list_box));
 
     let scan_btn = Button::with_label("Add folder…");
-    scan_btn.set_margin_start(6); scan_btn.set_margin_end(6);
-    scan_btn.set_margin_top(4); scan_btn.set_margin_bottom(6);
+    scan_btn.set_margin_start(6);
+    scan_btn.set_margin_end(6);
+    scan_btn.set_margin_top(4);
+    scan_btn.set_margin_bottom(6);
 
     let left = GtkBox::new(Orientation::Vertical, 0);
     left.append(&search);
@@ -103,10 +100,10 @@ fn build_ui(app: &Application) {
     left.append(&scan_btn);
     left.set_size_request(240, -1);
 
-    // ── Right pane ─────────────────────────────────────────────────────────
     let project_stack = Stack::builder()
         .transition_type(StackTransitionType::None)
-        .hexpand(true).vexpand(true)
+        .hexpand(true)
+        .vexpand(true)
         .build();
 
     let placeholder = Label::new(Some(
@@ -116,7 +113,6 @@ fn build_ui(app: &Application) {
     project_stack.add_named(&placeholder, Some("__placeholder__"));
     project_stack.set_visible_child_name("__placeholder__");
 
-    // ── Paned ──────────────────────────────────────────────────────────────
     let paned = Paned::new(Orientation::Horizontal);
     paned.set_start_child(Some(&left));
     paned.set_end_child(Some(&project_stack));
@@ -124,7 +120,6 @@ fn build_ui(app: &Application) {
     paned.set_shrink_start_child(false);
     paned.set_shrink_end_child(false);
 
-    // ── Window ─────────────────────────────────────────────────────────────
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Sizzle")
@@ -134,7 +129,6 @@ fn build_ui(app: &Application) {
         .build();
     window.set_titlebar(Some(&header));
 
-    // ── Shared state ───────────────────────────────────────────────────────
     let state = Rc::new(RefCell::new(AppState {
         store: store.clone(),
         projects,
@@ -145,7 +139,6 @@ fn build_ui(app: &Application) {
 
     populate_list(&state);
 
-    // ── Search filter ──────────────────────────────────────────────────────
     {
         let state = state.clone();
         search.connect_changed(move |entry| {
@@ -153,7 +146,6 @@ fn build_ui(app: &Application) {
             let st = state.borrow();
             let mut i = 0;
             while let Some(row) = st.list_box.row_at_index(i) {
-                // row → row_box (HBox) → info_box (VBox) → name_lbl (Label)
                 let label_text = row.child()
                     .and_downcast::<GtkBox>()
                     .and_then(|b| b.first_child())
@@ -168,17 +160,14 @@ fn build_ui(app: &Application) {
         });
     }
 
-    // ── Project selection ──────────────────────────────────────────────────
     {
         let state = state.clone();
         list_box.connect_row_activated(move |_, row| {
-            // path is stored in the row's widget name (set in populate_list)
             let path = row.widget_name().to_string();
             select_project(&state, &path);
         });
     }
 
-    // ── Scan button ────────────────────────────────────────────────────────
     {
         let state = state.clone();
         let window_weak = window.downgrade();
@@ -188,7 +177,6 @@ fn build_ui(app: &Application) {
         });
     }
 
-    // ── First launch: prompt if no roots ──────────────────────────────────
     if store.get_scan_settings().scan_roots.is_empty() {
         let state = state.clone();
         let window_weak = window.downgrade();
@@ -198,7 +186,6 @@ fn build_ui(app: &Application) {
         });
     }
 
-    // ── Memory monitor (every 2 s) ─────────────────────────────────────────
     glib::timeout_add_local(Duration::from_secs(2), move || {
         if let Some(mb) = read_mem_mb() {
             mem_label.set_text(&format!("Mem: {} MB", mb));
@@ -206,7 +193,6 @@ fn build_ui(app: &Application) {
         glib::ControlFlow::Continue
     });
 
-    // ── Git status refresh (every 5 s, visible project only) ──────────────
     {
         let state = state.clone();
         glib::timeout_add_local(Duration::from_secs(5), move || {
@@ -261,13 +247,10 @@ fn populate_list(state: &State) {
 
     let all_meta = st.store.get_all_metadata();
 
-    // Sort: marker group → most-recently-active first → alphabetical.
-    let mut sorted: Vec<&sizzle_core::ScannedProject> = st.projects.iter().collect();
+    let mut sorted: Vec<&ScannedProject> = st.projects.iter().collect();
     sorted.sort_by_key(|p| {
         let meta = all_meta.get(&p.path);
         let marker_key = marker_sort_key(meta.and_then(|m| m.marker.as_deref()));
-        // Reverse so larger (more recent) timestamps sort earlier;
-        // None sorts after any Some value because None < Some(_) in Option's ord.
         let time_key = Reverse(meta.and_then(|m| m.last_launched));
         let name_key = p.name.to_lowercase();
         (marker_key, time_key, name_key)
@@ -305,7 +288,7 @@ fn populate_list(state: &State) {
             .halign(gtk4::Align::Start)
             .margin_start(8).margin_top(0).margin_bottom(4)
             .build();
-        time_lbl.add_css_class("caption");  // smaller system font
+        time_lbl.add_css_class("caption");
 
         let info_box = GtkBox::new(Orientation::Vertical, 0);
         info_box.set_hexpand(true);
@@ -316,14 +299,12 @@ fn populate_list(state: &State) {
             info_box.set_opacity(0.45);
         }
 
-        // Star button: filled when favourite
         let star_btn = Button::with_label(if is_favorite { "★" } else { "☆" });
         star_btn.set_has_frame(false);
         star_btn.set_opacity(if is_favorite { 1.0 } else { 0.35 });
         star_btn.set_tooltip_text(Some(if is_favorite { "Unfavourite" } else { "Mark as favourite" }));
         star_btn.set_valign(gtk4::Align::Center);
 
-        // Trash button: active when ignored
         let trash_btn = Button::with_label("🗑");
         trash_btn.set_has_frame(false);
         trash_btn.set_opacity(if is_ignored { 1.0 } else { 0.35 });
@@ -337,12 +318,10 @@ fn populate_list(state: &State) {
         row_box.append(&trash_btn);
 
         let row = ListBoxRow::new();
-        // Store the path in the widget name for O(1) lookup on activation.
         row.set_widget_name(&project.path);
         row.set_child(Some(&row_box));
         st.list_box.append(&row);
 
-        // Star callback: toggle favourite ↔ normal
         {
             let path = project.path.clone();
             let state = state.clone();
@@ -358,7 +337,6 @@ fn populate_list(state: &State) {
             });
         }
 
-        // Trash callback: toggle ignored ↔ normal
         {
             let path = project.path.clone();
             let state = state.clone();
@@ -380,46 +358,76 @@ fn populate_list(state: &State) {
 
 fn select_project(state: &State, path: &str) {
     let path = path.to_string();
-    {
+
+    let project = {
         let st = state.borrow();
-        if !st.projects.iter().any(|p| p.path == path) { return; }
-    }
+        st.projects.iter().find(|p| p.path == path).cloned()
+    };
+    let Some(project) = project else { return };
 
     {
         let mut st = state.borrow_mut();
         if !st.project_widgets.contains_key(&path) {
-            let agent_cmd = st.store.get_agent_presets()
-                .into_iter().next()
-                .map(|p| p.command)
-                .unwrap_or_else(|| "claude".to_string());
+            let presets = st.store.get_agent_presets();
 
-            let agent = terminal::TerminalWidget::new(Some(&path), Some(agent_cmd));
-            let shell = terminal::TerminalWidget::new(Some(&path), None);
-            let git_view = make_git_view();
-
-            // Notebook: Agent | Shell
+            // ── Notebook with overview + markdown + explorer tabs ──────────
             let notebook = Notebook::new();
             notebook.set_hexpand(true);
             notebook.set_vexpand(true);
-            notebook.append_page(&agent.da, Some(&Label::new(Some("Agent"))));
-            notebook.append_page(&shell.da, Some(&Label::new(Some("Shell"))));
 
-            // Markdown tab
-            let md_view = markdown::MarkdownView::new();
-            notebook.append_page(&md_view.scroll, Some(&Label::new(Some("README"))));
-            load_readme(&path, &md_view);
+            let overview = build_overview_tab(&project);
+            notebook.append_page(&overview, Some(&Label::new(Some("Overview"))));
 
-            let agent2 = agent.clone();
-            let shell2 = shell.clone();
-            notebook.connect_switch_page(move |_, _, page_num| {
-                match page_num {
-                    0 => agent2.focus(),
-                    1 => shell2.focus(),
-                    _ => {}
+            let md_files = sizzle_core::files::get_markdown_files(path.clone());
+            for md_path in &md_files {
+                let tab_name = std::path::Path::new(md_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(md_path)
+                    .to_string();
+                let mv = markdown::MarkdownView::new();
+                match sizzle_core::files::read_markdown_file(md_path.clone()) {
+                    Some(content) => mv.render(&content),
+                    None => mv.render("*Failed to read file.*"),
                 }
-            });
+                notebook.append_page(&mv.scroll, Some(&Label::new(Some(&tab_name))));
+            }
 
-            // Git status strip (scrollable, fixed height)
+            let explorer = build_explorer_tab(&path);
+            notebook.append_page(&explorer, Some(&Label::new(Some("Explorer"))));
+
+            // ── Launch buttons ─────────────────────────────────────────────
+            let btn_box = GtkBox::new(Orientation::Horizontal, 4);
+            btn_box.set_margin_start(8);
+            btn_box.set_margin_end(8);
+            btn_box.set_margin_top(4);
+            btn_box.set_margin_bottom(4);
+            btn_box.set_halign(gtk4::Align::End);
+
+            let claude_btn = Button::with_label("Launch Claude");
+            let codex_btn  = Button::with_label("Launch Codex");
+            let shell_btn  = Button::with_label("Shell");
+            btn_box.append(&claude_btn);
+            btn_box.append(&codex_btn);
+            btn_box.append(&shell_btn);
+
+            // Collect preset buttons before connecting callbacks
+            let mut preset_btns: Vec<(Button, String, String)> = Vec::new();
+            for preset in &presets {
+                let btn = Button::with_label(&preset.label);
+                btn_box.append(&btn);
+                preset_btns.push((btn, preset.label.clone(), preset.command.clone()));
+            }
+
+            let spacer = GtkBox::new(Orientation::Horizontal, 0);
+            spacer.set_hexpand(true);
+
+            let top_bar = GtkBox::new(Orientation::Horizontal, 0);
+            top_bar.append(&spacer);
+            top_bar.append(&btn_box);
+
+            // ── Git status strip ───────────────────────────────────────────
+            let git_view = make_git_view();
             let git_scroll = ScrolledWindow::builder()
                 .hscrollbar_policy(gtk4::PolicyType::Automatic)
                 .vscrollbar_policy(gtk4::PolicyType::Automatic)
@@ -429,11 +437,42 @@ fn select_project(state: &State, path: &str) {
             git_scroll.set_child(Some(&git_view));
 
             let project_box = GtkBox::new(Orientation::Vertical, 0);
+            project_box.append(&top_bar);
             project_box.append(&notebook);
             project_box.append(&git_scroll);
 
+            // ── Connect launch buttons ─────────────────────────────────────
+            {
+                let nb = notebook.clone();
+                let p = path.clone();
+                claude_btn.connect_clicked(move |_| {
+                    launch_terminals(&p, "Claude", Some("claude".to_string()), &nb);
+                });
+            }
+            {
+                let nb = notebook.clone();
+                let p = path.clone();
+                codex_btn.connect_clicked(move |_| {
+                    launch_terminals(&p, "Codex", Some("codex".to_string()), &nb);
+                });
+            }
+            {
+                let nb = notebook.clone();
+                let p = path.clone();
+                shell_btn.connect_clicked(move |_| {
+                    launch_terminals(&p, "Shell", None, &nb);
+                });
+            }
+            for (btn, label, cmd) in preset_btns {
+                let nb = notebook.clone();
+                let p = path.clone();
+                btn.connect_clicked(move |_| {
+                    launch_terminals(&p, &label, Some(cmd.clone()), &nb);
+                });
+            }
+
             st.project_stack.add_named(&project_box, Some(&path));
-            st.project_widgets.insert(path.clone(), ProjectWidgets { agent, shell, git_view });
+            st.project_widgets.insert(path.clone(), ProjectWidgets { git_view });
         }
     }
 
@@ -441,11 +480,289 @@ fn select_project(state: &State, path: &str) {
         let st = state.borrow();
         st.project_stack.set_visible_child_name(&path);
         if let Some(pw) = st.project_widgets.get(&path) {
-            pw.agent.focus();
             update_git_status(&path, &pw.git_view);
         }
         st.store.set_last_launched(&path);
     }
+}
+
+// ── Overview tab ──────────────────────────────────────────────────────────
+
+fn build_overview_tab(project: &ScannedProject) -> ScrolledWindow {
+    let flow = FlowBox::new();
+    flow.set_selection_mode(gtk4::SelectionMode::None);
+    flow.set_column_spacing(6);
+    flow.set_row_spacing(6);
+    flow.set_margin_start(12);
+    flow.set_margin_top(12);
+    flow.set_margin_end(12);
+    flow.set_margin_bottom(12);
+
+    if project.detected_tags.is_empty() {
+        let lbl = Label::new(Some("No tags detected."));
+        flow.insert(&lbl, -1);
+    } else {
+        for tag in &project.detected_tags {
+            let chip = Label::builder()
+                .label(&format!("{} ({:.0})", tag.name, tag.score))
+                .margin_start(10)
+                .margin_end(10)
+                .margin_top(5)
+                .margin_bottom(5)
+                .build();
+            flow.insert(&chip, -1);
+        }
+    }
+
+    ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .hexpand(true)
+        .vexpand(true)
+        .child(&flow)
+        .build()
+}
+
+// ── Explorer tab ──────────────────────────────────────────────────────────
+
+fn build_explorer_tab(project_root: &str) -> Paned {
+    // ── Left: nav bar + file list ──────────────────────────────────────────
+    let path_lbl = Label::builder()
+        .halign(gtk4::Align::Start)
+        .hexpand(true)
+        .ellipsize(gtk4::pango::EllipsizeMode::Start)
+        .margin_start(6)
+        .margin_end(6)
+        .margin_top(4)
+        .margin_bottom(4)
+        .build();
+
+    let back_btn = Button::builder()
+        .label("↑")
+        .tooltip_text("Go up")
+        .has_frame(false)
+        .sensitive(false)
+        .margin_start(4)
+        .margin_top(4)
+        .margin_bottom(4)
+        .build();
+
+    let nav_bar = GtkBox::new(Orientation::Horizontal, 0);
+    nav_bar.append(&back_btn);
+    nav_bar.append(&path_lbl);
+
+    let file_list = ListBox::new();
+    file_list.set_selection_mode(gtk4::SelectionMode::Single);
+
+    let list_scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .vexpand(true)
+        .build();
+    list_scroll.set_child(Some(&file_list));
+
+    let left = GtkBox::new(Orientation::Vertical, 0);
+    left.append(&nav_bar);
+    left.append(&list_scroll);
+    left.set_size_request(240, -1);
+
+    // ── Right: content viewer ──────────────────────────────────────────────
+    let content_stack = Stack::new();
+    content_stack.set_hexpand(true);
+    content_stack.set_vexpand(true);
+
+    let placeholder = Label::builder()
+        .label("Select a file to preview")
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .build();
+    content_stack.add_named(&placeholder, Some("placeholder"));
+
+    let msg_lbl = Label::builder()
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .build();
+    content_stack.add_named(&msg_lbl, Some("message"));
+
+    let text_view = TextView::new();
+    text_view.set_editable(false);
+    text_view.set_monospace(true);
+    text_view.set_wrap_mode(WrapMode::None);
+    text_view.set_top_margin(8);
+    text_view.set_bottom_margin(8);
+    text_view.set_left_margin(8);
+    text_view.set_right_margin(8);
+    let text_scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Automatic)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .hexpand(true)
+        .vexpand(true)
+        .child(&text_view)
+        .build();
+    content_stack.add_named(&text_scroll, Some("text"));
+
+    let md_view = markdown::MarkdownView::new();
+    content_stack.add_named(&md_view.scroll, Some("markdown"));
+
+    content_stack.set_visible_child_name("placeholder");
+
+    // ── Paned ──────────────────────────────────────────────────────────────
+    let paned = Paned::new(Orientation::Horizontal);
+    paned.set_start_child(Some(&left));
+    paned.set_end_child(Some(&content_stack));
+    paned.set_position(240);
+    paned.set_shrink_start_child(false);
+    paned.set_shrink_end_child(false);
+
+    // ── Shared state: current directory ───────────────────────────────────
+    let current_dir: Rc<RefCell<String>> = Rc::new(RefCell::new(project_root.to_string()));
+    let project_root = project_root.to_string();
+
+    explorer_load_dir(
+        &file_list, &path_lbl, &back_btn,
+        &project_root, project_root.clone(), &current_dir,
+    );
+
+    // ── Row activated (connected once) ────────────────────────────────────
+    {
+        let fl = file_list.clone();
+        let pl = path_lbl.clone();
+        let bb = back_btn.clone();
+        let cs = content_stack.clone();
+        let tv = text_view.clone();
+        let mv = md_view.clone();
+        let ml = msg_lbl.clone();
+        let pr = project_root.clone();
+        let cd = current_dir.clone();
+
+        file_list.connect_row_activated(move |_, row| {
+            let path = row.widget_name().to_string();
+            if std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false) {
+                explorer_load_dir(&fl, &pl, &bb, &pr, path, &cd);
+            } else {
+                explorer_show_file(&cs, &tv, &mv, &ml, &pr, &path);
+            }
+        });
+    }
+
+    // ── Back button ────────────────────────────────────────────────────────
+    {
+        let fl = file_list.clone();
+        let pl = path_lbl.clone();
+        let bb = back_btn.clone();
+        let pr = project_root.clone();
+        let cd = current_dir.clone();
+
+        back_btn.connect_clicked(move |_| {
+            let cur = cd.borrow().clone();
+            let parent = std::path::Path::new(&cur)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .filter(|p| p.starts_with(&pr))
+                .unwrap_or_else(|| pr.clone());
+            explorer_load_dir(&fl, &pl, &bb, &pr, parent, &cd);
+        });
+    }
+
+    paned
+}
+
+fn explorer_load_dir(
+    file_list: &ListBox,
+    path_lbl: &Label,
+    back_btn: &Button,
+    project_root: &str,
+    dir: String,
+    current_dir: &Rc<RefCell<String>>,
+) {
+    *current_dir.borrow_mut() = dir.clone();
+
+    let rel = dir.strip_prefix(project_root).unwrap_or(&dir).trim_start_matches('/');
+    path_lbl.set_text(if rel.is_empty() { "/" } else { rel });
+
+    back_btn.set_sensitive(&dir != project_root);
+
+    while let Some(row) = file_list.row_at_index(0) {
+        file_list.remove(&row);
+    }
+
+    for entry in sizzle_core::files::list_directory(project_root.to_string(), Some(dir)) {
+        let prefix = if entry.is_directory { "📁 " } else { "  " };
+        let lbl = Label::builder()
+            .label(&format!("{}{}", prefix, entry.name))
+            .halign(gtk4::Align::Start)
+            .margin_start(8)
+            .margin_top(4)
+            .margin_bottom(4)
+            .build();
+        let row = ListBoxRow::new();
+        row.set_child(Some(&lbl));
+        row.set_widget_name(&entry.path);
+        file_list.append(&row);
+    }
+}
+
+fn explorer_show_file(
+    content_stack: &Stack,
+    text_view: &TextView,
+    md_view: &markdown::MarkdownView,
+    msg_lbl: &Label,
+    project_root: &str,
+    file_path: &str,
+) {
+    let preview = sizzle_core::files::preview_file(
+        project_root.to_string(),
+        file_path.to_string(),
+    );
+    match preview.kind.as_str() {
+        "text" => {
+            let content = preview.content.unwrap_or_default();
+            let ext = std::path::Path::new(file_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if matches!(ext.as_str(), "md" | "markdown" | "txt" | "rst") {
+                md_view.render(&content);
+                content_stack.set_visible_child_name("markdown");
+            } else {
+                text_view.buffer().set_text(&content);
+                content_stack.set_visible_child_name("text");
+            }
+        }
+        "tooLarge" => {
+            let mb = preview.size.unwrap_or(0) as f64 / (1024.0 * 1024.0);
+            msg_lbl.set_text(&format!("File too large to preview ({:.1} MB)", mb));
+            content_stack.set_visible_child_name("message");
+        }
+        _ => {
+            let msg = preview.message.unwrap_or_else(|| {
+                format!("Cannot preview this file ({})", preview.kind)
+            });
+            msg_lbl.set_text(&msg);
+            content_stack.set_visible_child_name("message");
+        }
+    }
+}
+
+// ── Launch a vertically split terminal pair ────────────────────────────────
+
+fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, notebook: &Notebook) {
+    let agent = terminal::TerminalWidget::new(Some(path), agent_cmd);
+    let shell  = terminal::TerminalWidget::new(Some(path), None);
+
+    let vpaned = Paned::new(Orientation::Vertical);
+    vpaned.set_start_child(Some(&agent.da));
+    vpaned.set_end_child(Some(&shell.da));
+    vpaned.set_position(300);
+    vpaned.set_shrink_start_child(false);
+    vpaned.set_shrink_end_child(false);
+    vpaned.set_vexpand(true);
+
+    let tab_idx = notebook.append_page(&vpaned, Some(&Label::new(Some(tab_label))));
+    notebook.set_current_page(Some(tab_idx));
+
+    agent.focus();
 }
 
 // ── Git status view ────────────────────────────────────────────────────────
@@ -456,19 +773,21 @@ fn make_git_view() -> TextView {
     view.set_cursor_visible(false);
     view.set_monospace(true);
     view.set_wrap_mode(WrapMode::None);
-    view.set_top_margin(4); view.set_bottom_margin(4);
-    view.set_left_margin(8); view.set_right_margin(8);
+    view.set_top_margin(4);
+    view.set_bottom_margin(4);
+    view.set_left_margin(8);
+    view.set_right_margin(8);
 
     let buf = view.buffer();
-    add_tag(&buf, "green",  "foreground", "#50fa7b");
-    add_tag(&buf, "red",    "foreground", "#ff5555");
-    add_tag(&buf, "yellow", "foreground", "#f1fa8c");
-    add_tag(&buf, "dim",    "foreground", "#888888");
+    add_git_tag(&buf, "green",  "foreground", "#50fa7b");
+    add_git_tag(&buf, "red",    "foreground", "#ff5555");
+    add_git_tag(&buf, "yellow", "foreground", "#f1fa8c");
+    add_git_tag(&buf, "dim",    "foreground", "#888888");
 
     view
 }
 
-fn add_tag(buf: &gtk4::TextBuffer, name: &str, prop: &str, val: &str) {
+fn add_git_tag(buf: &gtk4::TextBuffer, name: &str, prop: &str, val: &str) {
     let tag = gtk4::TextTag::new(Some(name));
     tag.set_property(prop, val);
     buf.tag_table().add(&tag);
@@ -486,7 +805,6 @@ fn update_git_status(path: &str, view: &TextView) {
         }
     };
 
-    // Branch line
     let branch = status.branch.as_deref().unwrap_or("(detached HEAD)");
     git_insert(&buf, &format!("branch: {}", branch), "dim");
     if status.ahead > 0 {
@@ -547,20 +865,6 @@ fn pick_folder_and_scan(state: &State, window: &ApplicationWindow) {
         }
         populate_list(&state);
     });
-}
-
-// ── README loader ─────────────────────────────────────────────────────────
-
-fn load_readme(project_path: &str, md_view: &markdown::MarkdownView) {
-    let files = sizzle_core::files::get_markdown_files(project_path.to_string());
-    // Prefer README.md at the top of the sorted list
-    if let Some(path) = files.first() {
-        if let Some(content) = sizzle_core::files::read_markdown_file(path.clone()) {
-            md_view.render(&content);
-            return;
-        }
-    }
-    md_view.render("*No README found.*");
 }
 
 // ── Memory usage ──────────────────────────────────────────────────────────

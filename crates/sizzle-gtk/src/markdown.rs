@@ -2,6 +2,7 @@ use gtk4::prelude::*;
 use gtk4::{ScrolledWindow, TextBuffer, TextTag, TextView, WrapMode};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+#[derive(Clone)]
 pub struct MarkdownView {
     pub scroll: ScrolledWindow,
     view: TextView,
