@@ -759,8 +759,29 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
     vpaned.set_shrink_end_child(false);
     vpaned.set_vexpand(true);
 
-    let tab_idx = notebook.append_page(&vpaned, Some(&Label::new(Some(tab_label))));
+    // Tab header: label + close button
+    let tab_lbl = Label::new(Some(tab_label));
+    let close_btn = Button::builder()
+        .icon_name("window-close-symbolic")
+        .has_frame(false)
+        .focus_on_click(false)
+        .tooltip_text("Close tab")
+        .build();
+    let tab_header = GtkBox::new(Orientation::Horizontal, 4);
+    tab_header.append(&tab_lbl);
+    tab_header.append(&close_btn);
+
+    let tab_idx = notebook.append_page(&vpaned, Some(&tab_header));
     notebook.set_current_page(Some(tab_idx));
+
+    // Close button removes the terminal tab
+    let nb = notebook.clone();
+    let page_widget = vpaned.clone();
+    close_btn.connect_clicked(move |_| {
+        if let Some(page_num) = nb.page_num(&page_widget) {
+            nb.remove_page(Some(page_num));
+        }
+    });
 
     agent.focus();
 }
