@@ -6,13 +6,13 @@ use gtk4::gdk;
 use gtk4::glib;
 use gtk4::pango;
 use gtk4::prelude::*;
-use gtk4::{DrawingArea, EventControllerKey};
+use gtk4::{DrawingArea, EventControllerKey, GestureClick, Popover};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
@@ -98,6 +98,7 @@ impl TerminalWidget {
         let widget = Self { da, term, sender, dirty, cols: cols_a, rows: rows_a };
         widget.setup_draw();
         widget.setup_keyboard();
+        widget.setup_context_menu();
         widget.setup_redraw_timer();
         widget.setup_resize();
         widget
@@ -114,8 +115,18 @@ impl TerminalWidget {
 
     fn setup_keyboard(&self) {
         let sender = self.sender.clone();
+        let term = self.term.clone();
         let ctrl = EventControllerKey::new();
         ctrl.connect_key_pressed(move |_, kv, _, mods| {
+            // Ctrl+Shift+V — paste from clipboard
+            if kv == gdk::Key::v
+                && mods.contains(gdk::ModifierType::CONTROL_MASK)
+                && mods.contains(gdk::ModifierType::SHIFT_MASK)
+            {
+                paste_from_clipboard(sender.clone(), term.clone());
+                return glib::Propagation::Stop;
+            }
+
             let bytes = key_to_bytes(kv, mods);
             if !bytes.is_empty() {
                 let _ = sender.send(Msg::Input(bytes.into()));
@@ -123,6 +134,36 @@ impl TerminalWidget {
             glib::Propagation::Stop
         });
         self.da.add_controller(ctrl);
+    }
+
+    fn setup_context_menu(&self) {
+        let sender = self.sender.clone();
+        let term = self.term.clone();
+        let da = self.da.clone();
+
+        let gesture = GestureClick::new();
+        gesture.set_button(3);
+        gesture.connect_pressed(move |_, _, _, _| {
+            let popover = Popover::new();
+            let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+
+            let paste_btn = gtk4::Button::with_label("Paste");
+            let s = sender.clone();
+            let t = term.clone();
+            paste_btn.connect_clicked({
+                let popover = popover.clone();
+                move |_| {
+                    paste_from_clipboard(s.clone(), t.clone());
+                    popover.popdown();
+                }
+            });
+            vbox.append(&paste_btn);
+
+            popover.set_child(Some(&vbox));
+            popover.set_parent(&da);
+            popover.popup();
+        });
+        self.da.add_controller(gesture);
     }
 
     fn setup_redraw_timer(&self) {
@@ -345,4 +386,32 @@ pub fn key_to_bytes(kv: gdk::Key, mods: gdk::ModifierType) -> Vec<u8> {
             c.encode_utf8(&mut buf).as_bytes().to_vec()
         }).unwrap_or_default(),
     }
+}
+
+fn paste_from_clipboard(sender: EventLoopSender, term: Arc<FairMutex<Term<DirtyFlag>>>) {
+    let display = match gdk::Display::default() {
+        Some(d) => d,
+        None => return,
+    };
+    let clipboard = display.clipboard();
+    clipboard.read_text_async(None::<&gtk4::gio::Cancellable>, move |result| {
+        let text = match result {
+            Ok(Some(t)) => t,
+            _ => return,
+        };
+        let use_bracketed = {
+            let t = term.lock();
+            t.mode().contains(TermMode::BRACKETED_PASTE)
+        };
+        let mut data = Vec::new();
+        if use_bracketed {
+            data.extend_from_slice(b"\x1b[200~");
+        }
+        let text = text.replace("\r\n", "\n").replace("\n", "\r");
+        data.extend_from_slice(text.as_bytes());
+        if use_bracketed {
+            data.extend_from_slice(b"\x1b[201~");
+        }
+        let _ = sender.send(Msg::Input(data.into()));
+    });
 }
