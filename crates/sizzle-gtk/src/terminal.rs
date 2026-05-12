@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -6,11 +8,13 @@ use gtk4::gdk;
 use gtk4::glib;
 use gtk4::pango;
 use gtk4::prelude::*;
-use gtk4::{DrawingArea, EventControllerKey, EventControllerScroll, EventControllerScrollFlags, GestureClick, Popover, Scrollbar};
+use gtk4::{DrawingArea, EventControllerKey, EventControllerScroll, EventControllerScrollFlags, GestureClick, GestureDrag, Popover, Scrollbar};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
@@ -19,6 +23,8 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 pub const CELL_W: f64 = 8.0;
 pub const CELL_H: f64 = 17.0;
 const FONT_PT: f64 = 11.0;
+const SEL_BG: (f64, f64, f64) = (0.30, 0.30, 0.65);
+const SEL_FG: (f64, f64, f64) = (0.95, 0.95, 1.0);
 
 pub struct TermSize {
     pub cols: usize,
@@ -131,6 +137,7 @@ impl TerminalWidget {
         widget.setup_draw();
         widget.setup_keyboard();
         widget.setup_context_menu();
+        widget.setup_selection();
         widget.setup_click_to_focus();
         widget.setup_scroll();
         widget.setup_redraw_timer();
@@ -154,23 +161,38 @@ impl TerminalWidget {
         let da = self.da.clone();
         let ctrl = EventControllerKey::new();
         ctrl.connect_key_pressed(move |_, kv, _, mods| {
-            // Jump to bottom on any key press if scrolled back (except paste)
-            if kv == gdk::Key::v
-                && mods.contains(gdk::ModifierType::CONTROL_MASK)
-                && mods.contains(gdk::ModifierType::SHIFT_MASK)
-            {
+            let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
+            let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
+
+            // Paste
+            if kv == gdk::Key::v && ctrl && shift {
                 paste_from_clipboard(sender.clone(), term.clone());
                 return glib::Propagation::Stop;
             }
 
+            // Copy selection
+            if (kv == gdk::Key::c && ctrl && shift) || (kv == gdk::Key::Insert && ctrl) {
+                copy_selection(term.clone());
+                return glib::Propagation::Stop;
+            }
+
+            // Jump to bottom on any key press if scrolled back
             {
                 let t = term.lock();
                 if t.grid().display_offset() > 0 {
                     let hist = t.grid().total_lines().saturating_sub(t.grid().screen_lines()) as f64;
                     drop(t);
                     term.lock().scroll_display(Scroll::Bottom);
-                    // gtk_value = history - doff, with doff=0 after Bottom
                     adj.set_value(hist);
+                    da.queue_draw();
+                }
+            }
+
+            // Clear selection on any other key press
+            {
+                let mut t = term.lock();
+                if t.selection.is_some() {
+                    t.selection = None;
                     da.queue_draw();
                 }
             }
@@ -195,6 +217,17 @@ impl TerminalWidget {
             let popover = Popover::new();
             let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
 
+            let copy_btn = gtk4::Button::with_label("Copy");
+            {
+                let t = term.clone();
+                let popover = popover.clone();
+                copy_btn.connect_clicked(move |_| {
+                    copy_selection(t.clone());
+                    popover.popdown();
+                });
+            }
+            vbox.append(&copy_btn);
+
             let paste_btn = gtk4::Button::with_label("Paste");
             let s = sender.clone();
             let t = term.clone();
@@ -212,6 +245,75 @@ impl TerminalWidget {
             popover.popup();
         });
         self.da.add_controller(gesture);
+    }
+
+    fn setup_selection(&self) {
+        let term = self.term.clone();
+        let da = self.da.clone();
+        let dirty = self.dirty.clone();
+
+        let start_state: Rc<RefCell<Option<(f64, f64, usize)>>> = Rc::new(RefCell::new(None));
+
+        let drag = GestureDrag::new();
+        {
+            let t = term.clone();
+            let d = da.clone();
+            let dirty = dirty.clone();
+            let start = start_state.clone();
+            drag.connect_drag_begin(move |_, start_x, start_y| {
+                let mut term = t.lock();
+                let doff = term.grid().display_offset();
+                let col = (start_x.max(0.0) / CELL_W) as usize;
+                let screen_row = (start_y.max(0.0) / CELL_H) as i32;
+                let grid_line = Line(screen_row - doff as i32);
+                term.selection = Some(Selection::new(
+                    SelectionType::Simple,
+                    Point::new(grid_line, Column(col)),
+                    Side::Left,
+                ));
+                *start.borrow_mut() = Some((start_x, start_y, doff));
+                dirty.store(true, Ordering::Release);
+                d.queue_draw();
+            });
+        }
+        {
+            let t = term.clone();
+            let d = da.clone();
+            let dirty = dirty.clone();
+            let start = start_state.clone();
+            drag.connect_drag_update(move |_, offset_x, offset_y| {
+                let (sx, sy, doff) = match *start.borrow() {
+                    Some(v) => v,
+                    None => return,
+                };
+                let cur_x = sx + offset_x;
+                let cur_y = sy + offset_y;
+                let col = (cur_x.max(0.0) / CELL_W) as usize;
+                let screen_row = (cur_y.max(0.0) / CELL_H) as i32;
+                let grid_line = Line(screen_row - doff as i32);
+                let mut term = t.lock();
+                if let Some(ref mut sel) = term.selection {
+                    sel.update(Point::new(grid_line, Column(col)), Side::Right);
+                    dirty.store(true, Ordering::Release);
+                    d.queue_draw();
+                }
+            });
+        }
+        {
+            let t = term.clone();
+            let d = da.clone();
+            let dirty = dirty.clone();
+            drag.connect_drag_end(move |_, _, _| {
+                let mut term = t.lock();
+                let should_clear = term.selection.as_ref().map_or(false, |s| s.is_empty());
+                if should_clear {
+                    term.selection = None;
+                }
+                dirty.store(true, Ordering::Release);
+                d.queue_draw();
+            });
+        }
+        self.da.add_controller(drag);
     }
 
     fn setup_click_to_focus(&self) {
@@ -236,6 +338,8 @@ impl TerminalWidget {
         scroll_ctrl.connect_scroll(move |_ctrl, _dx, dy| {
             let delta = -(dy.round() as i32);
             if delta != 0 {
+                // Clear selection on scroll
+                t.lock().selection = None;
                 t.lock().scroll_display(Scroll::Delta(delta));
                 let (doff, history) = {
                     let locked = t.lock();
@@ -267,6 +371,7 @@ impl TerminalWidget {
             // doff = history - gtk_value, clamp to valid range
             let target_doff = hist.saturating_sub(gtk_val);
             if target_doff != doff {
+                t.lock().selection = None;
                 t.lock().scroll_display(Scroll::Bottom);
                 t.lock().scroll_display(Scroll::Delta(target_doff as i32));
                 da_sb.queue_draw();
@@ -358,6 +463,8 @@ fn draw_term(
     let colors = content.colors;
     let cursor_pt = content.cursor.point;
     let display_offset = content.display_offset;
+    let selection = content.selection;
+    let cursor_shape = content.cursor.shape;
 
     cr.set_source_rgb(0.08, 0.08, 0.08);
     cr.paint().ok();
@@ -381,7 +488,12 @@ fn draw_term(
         // Hide cursor when scrolled back
         let on_cursor = ic.point == cursor_pt && display_offset == 0;
 
+        let is_selected = !on_cursor && selection.as_ref().map_or(false, |sel| {
+            sel.contains_cell(&ic, ic.point, cursor_shape)
+        });
+
         let (br, bg, bb) = if on_cursor { (0.85, 0.85, 0.85) }
+            else if is_selected { SEL_BG }
             else { resolve(cell.bg, false, colors) };
         cr.set_source_rgb(br, bg, bb);
         cr.rectangle(x, y, CELL_W, CELL_H);
@@ -391,6 +503,7 @@ fn draw_term(
         if ch == ' ' || ch == '\0' { continue; }
 
         let (fr, fg, fb) = if on_cursor { (0.08, 0.08, 0.08) }
+            else if is_selected { SEL_FG }
             else { resolve(cell.fg, true, colors) };
 
         let flags = cell.flags;
@@ -529,6 +642,15 @@ pub fn key_to_bytes(kv: gdk::Key, mods: gdk::ModifierType) -> Vec<u8> {
             let mut buf = [0u8; 4];
             c.encode_utf8(&mut buf).as_bytes().to_vec()
         }).unwrap_or_default(),
+    }
+}
+
+fn copy_selection(term: Arc<FairMutex<Term<DirtyFlag>>>) {
+    let text = term.lock().selection_to_string();
+    if let Some(text) = text {
+        if let Some(display) = gdk::Display::default() {
+            display.clipboard().set_text(&text);
+        }
     }
 }
 
