@@ -8,15 +8,16 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, HeaderBar,
-    Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
-    ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
+    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
+    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
+    ScrolledWindow, Stack, StackTransitionType, StyleContext, TextView, WrapMode,
 };
 
-use sizzle_core::{MetadataStore, ScannedProject, scan_projects};
+use sizzle_core::{AgentPreset, MetadataStore, ScanSettings, ScannedProject, scan_projects};
 
 // ── App state ─────────────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ struct AppState {
     projects: Vec<ScannedProject>,
     project_widgets: HashMap<String, ProjectWidgets>,
     project_stack: Stack,
+    git_stack: Stack,
     list_box: ListBox,
     active_terminals: HashMap<String, usize>,
     last_terminal_activity: HashMap<String, Vec<Arc<Mutex<Option<Instant>>>>>,
@@ -166,19 +168,27 @@ fn build_ui(app: &Application) {
     project_stack.add_named(&placeholder, Some("__placeholder__"));
     project_stack.set_visible_child_name("__placeholder__");
 
-    let paned = Paned::new(Orientation::Horizontal);
-    paned.set_start_child(Some(&left));
-    paned.set_end_child(Some(&project_stack));
-    paned.set_position(260);
-    paned.set_shrink_start_child(false);
-    paned.set_shrink_end_child(false);
+    let git_stack = Stack::new();
+
+    let inner_paned = Paned::new(Orientation::Horizontal);
+    inner_paned.set_start_child(Some(&project_stack));
+    inner_paned.set_end_child(Some(&git_stack));
+    inner_paned.set_position(700);
+    inner_paned.set_shrink_start_child(false);
+
+    let outer_paned = Paned::new(Orientation::Horizontal);
+    outer_paned.set_start_child(Some(&left));
+    outer_paned.set_end_child(Some(&inner_paned));
+    outer_paned.set_position(260);
+    outer_paned.set_shrink_start_child(false);
+    outer_paned.set_shrink_end_child(false);
 
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Sizzle")
         .default_width(1200)
         .default_height(750)
-        .child(&paned)
+        .child(&outer_paned)
         .build();
     window.set_titlebar(Some(&header));
 
@@ -187,6 +197,7 @@ fn build_ui(app: &Application) {
         projects,
         project_widgets: HashMap::new(),
         project_stack: project_stack.clone(),
+        git_stack: git_stack.clone(),
         list_box: list_box.clone(),
         active_terminals: HashMap::new(),
         last_terminal_activity: HashMap::new(),
@@ -325,6 +336,17 @@ fn build_ui(app: &Application) {
             }
             glib::ControlFlow::Continue
         });
+    }
+
+    // ── Dark background for the git status pane ──────────────────────────
+    let css_provider = CssProvider::new();
+    css_provider.load_from_data(
+        ".git-pane { background: #1e1e2e; }
+         .git-pane textview text { background: #1e1e2e; color: #cdd6f4; }
+         .git-pane label { color: #cdd6f4; }",
+    );
+    if let Some(display) = gdk::Display::default() {
+        StyleContext::add_provider_for_display(&display, &css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
 
     window.present();
@@ -632,20 +654,36 @@ fn select_project(state: &State, path: &str) {
             top_bar.append(&spacer);
             top_bar.append(&btn_box);
 
-            // ── Git status strip ───────────────────────────────────────────
+            // ── Git status strip (right pane) ─────────────────────────
             let git_view = make_git_view();
+            git_view.add_css_class("git-pane");
             let git_scroll = ScrolledWindow::builder()
                 .hscrollbar_policy(gtk4::PolicyType::Automatic)
                 .vscrollbar_policy(gtk4::PolicyType::Automatic)
-                .min_content_height(90)
-                .max_content_height(90)
+                .hexpand(true)
+                .vexpand(true)
                 .build();
+            git_scroll.add_css_class("git-pane");
             git_scroll.set_child(Some(&git_view));
+
+            let git_container = GtkBox::new(Orientation::Vertical, 0);
+            git_container.add_css_class("git-pane");
+            let git_header = Label::builder()
+                .label("Git Status")
+                .halign(gtk4::Align::Start)
+                .margin_start(8)
+                .margin_top(6)
+                .margin_bottom(2)
+                .build();
+            git_header.add_css_class("git-pane");
+            git_container.append(&git_header);
+            git_container.append(&git_scroll);
+
+            st.git_stack.add_named(&git_container, Some(&path));
 
             let project_box = GtkBox::new(Orientation::Vertical, 0);
             project_box.append(&top_bar);
             project_box.append(&notebook);
-            project_box.append(&git_scroll);
 
             // ── Connect launch buttons ─────────────────────────────────────
             {
@@ -694,6 +732,7 @@ fn select_project(state: &State, path: &str) {
     let focus_key = {
         let st = state.borrow();
         st.project_stack.set_visible_child_name(&path);
+        st.git_stack.set_visible_child_name(&path);
         if let Some(pw) = st.project_widgets.get(&path) {
             update_git_status(&path, &pw.git_view);
         }
@@ -1246,50 +1285,328 @@ fn show_settings_window(parent: &ApplicationWindow, state: &State) {
         .title("Settings")
         .modal(true)
         .transient_for(parent)
-        .default_width(320)
+        .default_width(550)
+        .default_height(450)
         .build();
 
-    let state = (*state).clone();
-    let parent = parent.clone();
-    let win2 = win.downgrade();
+    let notebook = Notebook::new();
 
-    let add_folder_btn = Button::with_label("Add scan folder…");
-    add_folder_btn.set_halign(gtk4::Align::Fill);
-    add_folder_btn.set_hexpand(true);
-    let state_a = state.clone();
-    let parent_a = parent.clone();
-    add_folder_btn.connect_clicked(move |_| {
-        let Some(win) = win2.upgrade() else { return };
-        win.close();
-        pick_folder_and_scan(&state_a, &parent_a);
-    });
+    build_settings_path_tab(
+        &notebook, parent, state,
+        "Scan Roots", "Add scan folder…",
+        |s| &s.scan_roots,
+        |s, p| { if !s.scan_roots.contains(&p) { s.scan_roots.push(p); } },
+        |s, p| { s.scan_roots.retain(|x| x != p); },
+    );
 
-    let win3 = win.downgrade();
-    let agent_presets_btn = Button::with_label("Agent presets…");
-    agent_presets_btn.set_halign(gtk4::Align::Fill);
-    agent_presets_btn.set_hexpand(true);
-    agent_presets_btn.connect_clicked(move |_| {
-        let Some(win) = win3.upgrade() else { return };
-        win.close();
-        let dialog = gtk4::MessageDialog::builder()
-            .buttons(gtk4::ButtonsType::Ok)
-            .transient_for(&parent)
-            .text("Agent presets")
-            .secondary_text("Edit agent presets in ~/.config/sizzle/db.json\nor use the Tauri UI for now.")
-            .build();
-        dialog.connect_response(|d, _| d.close());
-        dialog.present();
-    });
+    build_settings_path_tab(
+        &notebook, parent, state,
+        "Ignore Paths", "Add ignore path…",
+        |s| &s.ignore_roots,
+        |s, p| { if !s.ignore_roots.contains(&p) { s.ignore_roots.push(p); } },
+        |s, p| { s.ignore_roots.retain(|x| x != p); },
+    );
+
+    build_settings_path_tab(
+        &notebook, parent, state,
+        "Manual Projects", "Add manual project…",
+        |s| &s.manual_project_roots,
+        |s, p| { if !s.manual_project_roots.contains(&p) { s.manual_project_roots.push(p); } },
+        |s, p| { s.manual_project_roots.retain(|x| x != p); },
+    );
+
+    build_agent_presets_tab(&notebook, parent, state);
+
+    win.set_child(Some(&notebook));
+    win.present();
+}
+
+fn build_settings_path_tab(
+    notebook: &Notebook,
+    parent: &ApplicationWindow,
+    state: &State,
+    tab_label: &str,
+    add_btn_label: &str,
+    get_items: fn(&ScanSettings) -> &[String],
+    add_item: fn(&mut ScanSettings, String),
+    remove_item: fn(&mut ScanSettings, &str),
+) {
+    let state = state.clone();
+    let list_box = ListBox::new();
+
+    /// Populate the ListBox from the current scan settings.
+    fn populate(list_box: &ListBox, state: &State,
+                get_items: fn(&ScanSettings) -> &[String],
+                remove_item: fn(&mut ScanSettings, &str))
+    {
+        while let Some(row) = list_box.row_at_index(0) {
+            list_box.remove(&row);
+        }
+        let settings = state.borrow().store.get_scan_settings();
+        let items = get_items(&settings).to_vec();
+        for item in items {
+            let lbl = Label::builder()
+                .label(&item)
+                .halign(gtk4::Align::Start)
+                .hexpand(true)
+                .margin_start(8).margin_top(4).margin_bottom(4)
+                .ellipsize(gtk4::pango::EllipsizeMode::Middle)
+                .build();
+            let remove_btn = Button::builder()
+                .label("✕")
+                .has_frame(false)
+                .tooltip_text("Remove")
+                .build();
+            let hbox = GtkBox::new(Orientation::Horizontal, 0);
+            hbox.append(&lbl);
+            hbox.append(&remove_btn);
+            let row = ListBoxRow::new();
+            row.set_child(Some(&hbox));
+            list_box.append(&row);
+
+            let state = state.clone();
+            let list_box = list_box.clone();
+            let item = item.clone();
+            remove_btn.connect_clicked(move |_| {
+                let mut settings = state.borrow().store.get_scan_settings();
+                remove_item(&mut settings, &item);
+                let projects = scan_projects(&settings);
+                {
+                    let mut st = state.borrow_mut();
+                    st.store.set_scan_settings(&settings);
+                    st.projects = projects;
+                }
+                populate_list(&state);
+                populate(&list_box, &state, get_items, remove_item);
+            });
+        }
+    }
+
+    populate(&list_box, &state, get_items, remove_item);
+
+    let scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .vexpand(true)
+        .build();
+    scroll.set_child(Some(&list_box));
+
+    let add_btn_label = add_btn_label.to_string();
+    let add_btn = Button::with_label(&add_btn_label);
+    {
+        let state = state.clone();
+        let list_box = list_box.clone();
+        let parent_win = parent.clone();
+        let add_btn_label = add_btn_label.clone();
+        add_btn.connect_clicked(move |_| {
+            let dialog = gtk4::FileDialog::builder().title(&add_btn_label).build();
+            let state = state.clone();
+            let list_box = list_box.clone();
+            dialog.select_folder(Some(&parent_win), gtk4::gio::Cancellable::NONE, move |result| {
+                let Ok(file) = result else { return };
+                let Some(path) = file.path() else { return };
+                let path_str = path.to_string_lossy().to_string();
+
+                let mut settings = state.borrow().store.get_scan_settings();
+                add_item(&mut settings, path_str);
+                let projects = scan_projects(&settings);
+                {
+                    let mut st = state.borrow_mut();
+                    st.store.set_scan_settings(&settings);
+                    st.projects = projects;
+                }
+                populate_list(&state);
+                populate(&list_box, &state, get_items, remove_item);
+            });
+        });
+    }
 
     let vbox = GtkBox::new(Orientation::Vertical, 8);
-    vbox.set_margin_start(16);
-    vbox.set_margin_end(16);
-    vbox.set_margin_top(16);
-    vbox.set_margin_bottom(16);
-    vbox.append(&add_folder_btn);
-    vbox.append(&agent_presets_btn);
+    vbox.set_margin_start(12);
+    vbox.set_margin_end(12);
+    vbox.set_margin_top(12);
+    vbox.set_margin_bottom(12);
+    vbox.append(&scroll);
+    vbox.append(&add_btn);
+
+    notebook.append_page(&vbox, Some(&Label::new(Some(tab_label))));
+}
+
+// ── Agent Presets tab ──────────────────────────────────────────────────────
+
+fn refresh_presets_listbox(parent: &ApplicationWindow, list_box: &ListBox, state: &State) {
+    while let Some(row) = list_box.row_at_index(0) {
+        list_box.remove(&row);
+    }
+    let presets = state.borrow().store.get_agent_presets();
+    for (i, preset) in presets.iter().enumerate() {
+        let label = preset.label.clone();
+        let command = preset.command.clone();
+
+        let lbl = Label::builder()
+            .label(&format!("{} → {}", preset.label, preset.command))
+            .halign(gtk4::Align::Start)
+            .hexpand(true)
+            .margin_start(8).margin_top(4).margin_bottom(4)
+            .build();
+
+        let edit_btn = Button::builder()
+            .label("✎")
+            .has_frame(false)
+            .tooltip_text("Edit")
+            .build();
+        let remove_btn = Button::builder()
+            .label("✕")
+            .has_frame(false)
+            .tooltip_text("Remove")
+            .build();
+
+        let hbox = GtkBox::new(Orientation::Horizontal, 0);
+        hbox.append(&lbl);
+        hbox.append(&edit_btn);
+        hbox.append(&remove_btn);
+
+        let row = ListBoxRow::new();
+        row.set_child(Some(&hbox));
+        list_box.append(&row);
+
+        // Owned clones for edit button closure
+        let state_e = state.clone();
+        let list_box_e = list_box.clone();
+        let parent_e = parent.clone();
+        let edit_label = label.clone();
+        let edit_command = command.clone();
+        edit_btn.connect_clicked(move |_| {
+            show_agent_preset_dialog(&parent_e, &state_e, &list_box_e,
+                Some((edit_label.clone(), edit_command.clone(), i)));
+        });
+
+        // Separate owned clones for remove button closure
+        let state_r = state.clone();
+        let list_box_r = list_box.clone();
+        let parent_r = parent.clone();
+        remove_btn.connect_clicked(move |_| {
+            let mut presets = state_r.borrow().store.get_agent_presets();
+            presets.remove(i);
+            state_r.borrow().store.set_agent_presets(presets);
+            refresh_presets_listbox(&parent_r, &list_box_r, &state_r);
+        });
+    }
+}
+
+fn build_agent_presets_tab(notebook: &Notebook, parent: &ApplicationWindow, state: &State) {
+    let state = state.clone();
+    let list_box = ListBox::new();
+    refresh_presets_listbox(parent, &list_box, &state);
+
+    let scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .vexpand(true)
+        .build();
+    scroll.set_child(Some(&list_box));
+
+    let add_btn = Button::with_label("Add preset…");
+    {
+        let state = state.clone();
+        let list_box = list_box.clone();
+        let parent = parent.clone();
+        add_btn.connect_clicked(move |_| {
+            show_agent_preset_dialog(&parent, &state, &list_box, None);
+        });
+    }
+
+    let vbox = GtkBox::new(Orientation::Vertical, 8);
+    vbox.set_margin_start(12);
+    vbox.set_margin_end(12);
+    vbox.set_margin_top(12);
+    vbox.set_margin_bottom(12);
+    vbox.append(&scroll);
+    vbox.append(&add_btn);
+
+    notebook.append_page(&vbox, Some(&Label::new(Some("Agent Presets"))));
+}
+
+fn show_agent_preset_dialog(
+    parent: &ApplicationWindow,
+    state: &State,
+    list_box: &ListBox,
+    existing: Option<(String, String, usize)>,
+) {
+    let win = ApplicationWindow::builder()
+        .application(parent.application().as_ref().unwrap())
+        .title("Agent Preset")
+        .modal(true)
+        .transient_for(parent)
+        .default_width(400)
+        .build();
+
+    let label_entry = Entry::builder()
+        .placeholder_text("Label (e.g. DeepSeek)")
+        .build();
+    let cmd_entry = Entry::builder()
+        .placeholder_text("Command (e.g. /usr/bin/deepseek)")
+        .build();
+
+    if let Some((ref label, ref cmd, _)) = existing {
+        label_entry.set_text(label);
+        cmd_entry.set_text(cmd);
+    }
+
+    let save_btn = Button::with_label("Save");
+    let cancel_btn = Button::with_label("Cancel");
+
+    let btn_box = GtkBox::new(Orientation::Horizontal, 8);
+    btn_box.set_halign(gtk4::Align::End);
+    btn_box.append(&cancel_btn);
+    btn_box.append(&save_btn);
+
+    let vbox = GtkBox::new(Orientation::Vertical, 8);
+    vbox.set_margin_start(12);
+    vbox.set_margin_end(12);
+    vbox.set_margin_top(12);
+    vbox.set_margin_bottom(12);
+    vbox.append(&label_entry);
+    vbox.append(&cmd_entry);
+    vbox.append(&btn_box);
 
     win.set_child(Some(&vbox));
+
+    let win_weak = win.downgrade();
+    cancel_btn.connect_clicked(move |_| {
+        if let Some(w) = win_weak.upgrade() {
+            w.close();
+        }
+    });
+
+    let state = state.clone();
+    let list_box = list_box.clone();
+    let parent = parent.clone();
+    let edit_idx = existing.as_ref().map(|(_, _, i)| *i);
+    let win_weak2 = win.downgrade();
+    save_btn.connect_clicked(move |_| {
+        let label = label_entry.text().trim().to_string();
+        let command = cmd_entry.text().trim().to_string();
+        if label.is_empty() || command.is_empty() {
+            return;
+        }
+
+        let mut presets = state.borrow().store.get_agent_presets();
+        if let Some(idx) = edit_idx {
+            if idx < presets.len() {
+                presets[idx] = AgentPreset { label, command };
+            }
+        } else {
+            presets.push(AgentPreset { label, command });
+        }
+        state.borrow().store.set_agent_presets(presets);
+        refresh_presets_listbox(&parent, &list_box, &state);
+
+        if let Some(w) = win_weak2.upgrade() {
+            w.close();
+        }
+    });
+
     win.present();
 }
 
