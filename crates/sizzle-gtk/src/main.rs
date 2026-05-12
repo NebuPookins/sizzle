@@ -1013,6 +1013,25 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
 
     populate_list(state);
 
+    // Wire up focus tracking: when one terminal gets focus, the other dims.
+    agent.set_focused(true);
+    shell.set_focused(false);
+    {
+        let a = agent.clone();
+        let s = shell.clone();
+        agent.connect_focus_in(move || {
+            a.set_focused(true);
+            s.set_focused(false);
+        });
+    }
+    {
+        let a = agent.clone();
+        let s = shell.clone();
+        shell.connect_focus_in(move || {
+            s.set_focused(true);
+            a.set_focused(false);
+        });
+    }
     // When either terminal's child process exits, push to pending_exits so the
     // periodic timer can decrement the counter and refresh the list.
     {

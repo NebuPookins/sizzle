@@ -24,3 +24,7 @@ of the right click.
 
 I should be able to scroll up and down the terminal history with the mouse wheel
 using SHIFT-PAGEUP and SHIFT-PAGE-DOWN.
+
+We should send focus events to applications if they can accept them:
+  - Focus In: Sent when you click on or switch to the terminal window/tab (e.g., CSI I or \e[I).
+  - Focus Out: Sent when you click away or switch to another window/tab (e.g., CSI O or \e[O).
