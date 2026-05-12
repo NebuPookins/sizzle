@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gtk4::prelude::*;
 use gtk4::{ScrolledWindow, TextBuffer, TextTag, TextView, WrapMode};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -6,6 +9,7 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 pub struct MarkdownView {
     pub scroll: ScrolledWindow,
     view: TextView,
+    source: Rc<RefCell<String>>,
 }
 
 impl MarkdownView {
@@ -29,15 +33,22 @@ impl MarkdownView {
             .build();
         scroll.set_child(Some(&view));
 
-        Self { scroll, view }
+        Self { scroll, view, source: Rc::new(RefCell::new(String::new())) }
     }
 
+    /// Render markdown (view mode). Stores the source for later editing.
     pub fn render(&self, markdown: &str) {
+        *self.source.borrow_mut() = markdown.to_string();
+        self.render_from_source();
+    }
+
+    fn render_from_source(&self) {
+        let markdown = self.source.borrow().clone();
         let buf = self.view.buffer();
         buf.set_text("");
 
         let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
-        let parser = Parser::new_ext(markdown, opts);
+        let parser = Parser::new_ext(&markdown, opts);
 
         let mut ctx = RenderCtx {
             buf: &buf,
@@ -50,6 +61,31 @@ impl MarkdownView {
         for event in parser {
             ctx.handle(event);
         }
+    }
+
+    /// Toggle between view (stylized, read-only) and edit (raw text, editable) mode.
+    pub fn set_editable(&self, editable: bool) {
+        self.view.set_editable(editable);
+        self.view.set_cursor_visible(editable);
+        if editable {
+            let raw = self.source.borrow().clone();
+            self.view.buffer().set_text(&raw);
+        } else {
+            self.render_from_source();
+        }
+    }
+
+    /// Return the current buffer text (what the user sees / has typed).
+    pub fn get_buffer_text(&self) -> String {
+        let buf = self.view.buffer();
+        let start = buf.start_iter();
+        let end = buf.end_iter();
+        buf.text(&start, &end, false).to_string()
+    }
+
+    /// Update the stored markdown source (e.g. after a successful save).
+    pub fn set_source(&self, text: &str) {
+        *self.source.borrow_mut() = text.to_string();
     }
 }
 

@@ -429,7 +429,76 @@ fn select_project(state: &State, path: &str) {
                     Some(content) => mv.render(&content),
                     None => mv.render("*Failed to read file.*"),
                 }
-                notebook.append_page(&mv.scroll, Some(&Label::new(Some(&tab_name))));
+
+                // ── Toolbar: Edit / Save / Cancel buttons ─────────────────
+                let edit_btn = Button::with_label("Edit");
+                edit_btn.set_has_frame(false);
+                edit_btn.set_margin_start(4);
+                edit_btn.set_margin_top(4);
+                edit_btn.set_margin_bottom(4);
+
+                let save_btn = Button::with_label("Save");
+                save_btn.set_has_frame(false);
+                save_btn.set_visible(false);
+
+                let cancel_btn = Button::with_label("Cancel");
+                cancel_btn.set_has_frame(false);
+                cancel_btn.set_visible(false);
+
+                let spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+                spacer.set_hexpand(true);
+
+                let toolbar = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+                toolbar.set_margin_start(8);
+                toolbar.set_margin_end(8);
+                toolbar.append(&spacer);
+                toolbar.append(&edit_btn);
+                toolbar.append(&save_btn);
+                toolbar.append(&cancel_btn);
+
+                let mv_edit = mv.clone();
+                let eb = edit_btn.clone();
+                let sb = save_btn.clone();
+                let cb = cancel_btn.clone();
+                edit_btn.connect_clicked(move |_| {
+                    mv_edit.set_editable(true);
+                    eb.set_visible(false);
+                    sb.set_visible(true);
+                    cb.set_visible(true);
+                });
+
+                let mv_cancel = mv.clone();
+                let eb2 = edit_btn.clone();
+                let sb2 = save_btn.clone();
+                let cb2 = cancel_btn.clone();
+                cancel_btn.connect_clicked(move |_| {
+                    mv_cancel.set_editable(false);
+                    eb2.set_visible(true);
+                    sb2.set_visible(false);
+                    cb2.set_visible(false);
+                });
+
+                let fp = md_path.clone();
+                let mv_save = mv.clone();
+                let eb3 = edit_btn.clone();
+                let sb3 = save_btn.clone();
+                let cb3 = cancel_btn.clone();
+                save_btn.connect_clicked(move |_| {
+                    let text = mv_save.get_buffer_text();
+                    mv_save.set_source(&text);
+                    if sizzle_core::files::write_markdown_file(fp.clone(), text).is_ok() {
+                        mv_save.set_editable(false);
+                        eb3.set_visible(true);
+                        sb3.set_visible(false);
+                        cb3.set_visible(false);
+                    }
+                });
+
+                let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+                container.append(&toolbar);
+                container.append(&mv.scroll);
+
+                notebook.append_page(&container, Some(&Label::new(Some(&tab_name))));
             }
 
             let explorer = build_explorer_tab(&path);
@@ -611,7 +680,82 @@ fn build_explorer_tab(project_root: &str) -> Paned {
     content_stack.add_named(&text_scroll, Some("text"));
 
     let md_view = markdown::MarkdownView::new();
-    content_stack.add_named(&md_view.scroll, Some("markdown"));
+    let current_md_path: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
+    // ── Explorer toolbar for markdown editing ──────────────────────────
+    let md_edit_btn = Button::with_label("Edit");
+    md_edit_btn.set_has_frame(false);
+    md_edit_btn.set_margin_start(4);
+    md_edit_btn.set_margin_top(4);
+    md_edit_btn.set_margin_bottom(4);
+    let md_save_btn = Button::with_label("Save");
+    md_save_btn.set_has_frame(false);
+    md_save_btn.set_visible(false);
+    let md_cancel_btn = Button::with_label("Cancel");
+    md_cancel_btn.set_has_frame(false);
+    md_cancel_btn.set_visible(false);
+
+    let md_toolbar_spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    md_toolbar_spacer.set_hexpand(true);
+
+    let md_toolbar = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+    md_toolbar.set_margin_start(8);
+    md_toolbar.set_margin_end(8);
+    md_toolbar.append(&md_toolbar_spacer);
+    md_toolbar.append(&md_edit_btn);
+    md_toolbar.append(&md_save_btn);
+    md_toolbar.append(&md_cancel_btn);
+
+    let md_container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    md_container.append(&md_toolbar);
+    md_container.append(&md_view.scroll);
+    content_stack.add_named(&md_container, Some("markdown"));
+
+    // Wire up explorer markdown edit/save/cancel
+    {
+        let mv = md_view.clone();
+        let eb = md_edit_btn.clone();
+        let sb = md_save_btn.clone();
+        let cb = md_cancel_btn.clone();
+        md_edit_btn.connect_clicked(move |_| {
+            mv.set_editable(true);
+            eb.set_visible(false);
+            sb.set_visible(true);
+            cb.set_visible(true);
+        });
+    }
+    {
+        let mv = md_view.clone();
+        let eb2 = md_edit_btn.clone();
+        let sb2 = md_save_btn.clone();
+        let cb2 = md_cancel_btn.clone();
+        md_cancel_btn.connect_clicked(move |_| {
+            mv.set_editable(false);
+            eb2.set_visible(true);
+            sb2.set_visible(false);
+            cb2.set_visible(false);
+        });
+    }
+    {
+        let mv = md_view.clone();
+        let eb3 = md_edit_btn.clone();
+        let sb3 = md_save_btn.clone();
+        let cb3 = md_cancel_btn.clone();
+        let path = current_md_path.clone();
+        md_save_btn.connect_clicked(move |_| {
+            let text = mv.get_buffer_text();
+            let file_path = path.borrow().clone();
+            if let Some(fp) = file_path {
+                mv.set_source(&text);
+                if sizzle_core::files::write_markdown_file(fp, text).is_ok() {
+                    mv.set_editable(false);
+                    eb3.set_visible(true);
+                    sb3.set_visible(false);
+                    cb3.set_visible(false);
+                }
+            }
+        });
+    }
 
     content_stack.set_visible_child_name("placeholder");
 
@@ -643,6 +787,10 @@ fn build_explorer_tab(project_root: &str) -> Paned {
         let ml = msg_lbl.clone();
         let pr = project_root.clone();
         let cd = current_dir.clone();
+        let md_path = current_md_path.clone();
+        let eb = md_edit_btn.clone();
+        let sb = md_save_btn.clone();
+        let cb = md_cancel_btn.clone();
 
         file_list.connect_row_activated(move |_, row| {
             let path = row.widget_name().to_string();
@@ -650,6 +798,15 @@ fn build_explorer_tab(project_root: &str) -> Paned {
                 explorer_load_dir(&fl, &pl, &bb, &pr, path, &cd);
             } else {
                 explorer_show_file(&cs, &tv, &mv, &ml, &pr, &path);
+                // Track the current file for markdown editing
+                if cs.visible_child_name().as_deref() == Some("markdown") {
+                    *md_path.borrow_mut() = Some(path);
+                    // Reset toolbar to view mode when switching files
+                    mv.set_editable(false);
+                    eb.set_visible(true);
+                    sb.set_visible(false);
+                    cb.set_visible(false);
+                }
             }
         });
     }
