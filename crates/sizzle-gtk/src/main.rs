@@ -5,13 +5,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, Entry, HeaderBar,
+    Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, HeaderBar,
     Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
     ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
 };
@@ -30,6 +30,8 @@ struct AppState {
     project_widgets: HashMap<String, ProjectWidgets>,
     project_stack: Stack,
     list_box: ListBox,
+    active_terminals: HashMap<String, usize>,
+    pending_exits: Arc<Mutex<Vec<String>>>,
 }
 
 type State = Rc<RefCell<AppState>>;
@@ -39,7 +41,8 @@ type State = Rc<RefCell<AppState>>;
 fn main() {
     env_logger::init();
     let app = Application::builder()
-        .application_id("com.sizzle.app")
+        .application_id("net.nebupookins.sizzle")
+        .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
         .build();
     app.connect_activate(build_ui);
     app.run();
@@ -135,6 +138,8 @@ fn build_ui(app: &Application) {
         project_widgets: HashMap::new(),
         project_stack: project_stack.clone(),
         list_box: list_box.clone(),
+        active_terminals: HashMap::new(),
+        pending_exits: Arc::new(Mutex::new(Vec::new())),
     }));
 
     populate_list(&state);
@@ -186,7 +191,28 @@ fn build_ui(app: &Application) {
         });
     }
 
+    let state_for_exits = state.clone();
     glib::timeout_add_local(Duration::from_secs(2), move || {
+        // Process exited terminals
+        {
+            let s = state_for_exits.borrow();
+            let exits = std::mem::take(&mut *s.pending_exits.lock().unwrap());
+            if !exits.is_empty() {
+                drop(s);
+                let mut s = state_for_exits.borrow_mut();
+                for path in exits {
+                    if let Some(n) = s.active_terminals.get_mut(&path) {
+                        *n -= 1;
+                        if *n == 0 {
+                            s.active_terminals.remove(&path);
+                        }
+                    }
+                }
+                drop(s);
+                populate_list(&state_for_exits);
+            }
+        }
+
         if let Some(mb) = read_mem_mb() {
             mem_label.set_text(&format!("Mem: {} MB", mb));
         }
@@ -313,6 +339,22 @@ fn populate_list(state: &State) {
         trash_btn.set_valign(gtk4::Align::Center);
 
         let row_box = GtkBox::new(Orientation::Horizontal, 0);
+
+        // Green dot for active (has running terminals) projects
+        if st.active_terminals.contains_key(&project.path) {
+            let dot = DrawingArea::new();
+            dot.set_size_request(8, 8);
+            dot.set_valign(gtk4::Align::Center);
+            dot.set_margin_start(8);
+            dot.set_draw_func(|_, cr, w, h| {
+                let r = (w.min(h) as f64 / 2.0).min(4.0);
+                cr.set_source_rgb(0.31, 0.98, 0.48); // #50fa7b green
+                cr.arc(w as f64 / 2.0, h as f64 / 2.0, r - 0.5, 0.0, 2.0 * std::f64::consts::PI);
+                cr.fill().ok();
+            });
+            row_box.append(&dot);
+        }
+
         row_box.append(&info_box);
         row_box.append(&star_btn);
         row_box.append(&trash_btn);
@@ -445,29 +487,33 @@ fn select_project(state: &State, path: &str) {
             {
                 let nb = notebook.clone();
                 let p = path.clone();
+                let st = state.clone();
                 claude_btn.connect_clicked(move |_| {
-                    launch_terminals(&p, "Claude", Some("claude".to_string()), &nb);
+                    launch_terminals(&p, "Claude", Some("claude".to_string()), &nb, &st);
                 });
             }
             {
                 let nb = notebook.clone();
                 let p = path.clone();
+                let st = state.clone();
                 codex_btn.connect_clicked(move |_| {
-                    launch_terminals(&p, "Codex", Some("codex".to_string()), &nb);
+                    launch_terminals(&p, "Codex", Some("codex".to_string()), &nb, &st);
                 });
             }
             {
                 let nb = notebook.clone();
                 let p = path.clone();
+                let st = state.clone();
                 shell_btn.connect_clicked(move |_| {
-                    launch_terminals(&p, "Shell", None, &nb);
+                    launch_terminals(&p, "Shell", None, &nb, &st);
                 });
             }
             for (btn, label, cmd) in preset_btns {
                 let nb = notebook.clone();
                 let p = path.clone();
+                let st = state.clone();
                 btn.connect_clicked(move |_| {
-                    launch_terminals(&p, &label, Some(cmd.clone()), &nb);
+                    launch_terminals(&p, &label, Some(cmd.clone()), &nb, &st);
                 });
             }
 
@@ -710,13 +756,38 @@ fn explorer_show_file(
 
 // ── Launch a vertically split terminal pair ────────────────────────────────
 
-fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, notebook: &Notebook) {
+fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, notebook: &Notebook, state: &State) {
+    // Record that this project now has active terminals
+    let pending_exits = {
+        let mut st = state.borrow_mut();
+        *st.active_terminals.entry(path.to_string()).or_insert(0) += 2;
+        st.pending_exits.clone()
+    };
+    populate_list(state);
+
     let agent = terminal::TerminalWidget::new(Some(path), agent_cmd);
     let shell  = terminal::TerminalWidget::new(Some(path), None);
 
+    // When either terminal's child process exits, push to pending_exits so the
+    // periodic timer can decrement the counter and refresh the list.
+    {
+        let pe = pending_exits.clone();
+        let p = path.to_string();
+        agent.set_on_exit(move || {
+            pe.lock().unwrap().push(p.clone());
+        });
+    }
+    {
+        let pe = pending_exits;
+        let p = path.to_string();
+        shell.set_on_exit(move || {
+            pe.lock().unwrap().push(p.clone());
+        });
+    }
+
     let vpaned = Paned::new(Orientation::Vertical);
-    vpaned.set_start_child(Some(&agent.da));
-    vpaned.set_end_child(Some(&shell.da));
+    vpaned.set_start_child(Some(&agent.container));
+    vpaned.set_end_child(Some(&shell.container));
     vpaned.set_position(300);
     vpaned.set_shrink_start_child(false);
     vpaned.set_shrink_end_child(false);

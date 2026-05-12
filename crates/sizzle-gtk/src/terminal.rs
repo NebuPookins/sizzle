@@ -1,16 +1,16 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gtk4::gdk;
 use gtk4::glib;
 use gtk4::pango;
 use gtk4::prelude::*;
-use gtk4::{DrawingArea, EventControllerKey, GestureClick, Popover};
+use gtk4::{DrawingArea, EventControllerKey, EventControllerScroll, EventControllerScrollFlags, GestureClick, Popover, Scrollbar};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
@@ -32,22 +32,42 @@ impl Dimensions for TermSize {
 }
 
 #[derive(Clone)]
-pub struct DirtyFlag(pub Arc<AtomicBool>);
+pub struct DirtyFlag {
+    pub dirty: Arc<AtomicBool>,
+    on_exit: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
+}
+
+impl DirtyFlag {
+    pub fn new() -> Self {
+        Self {
+            dirty: Arc::new(AtomicBool::new(true)),
+            on_exit: Arc::new(Mutex::new(None)),
+        }
+    }
+}
 
 impl EventListener for DirtyFlag {
-    fn send_event(&self, _: Event) {
-        self.0.store(true, Ordering::Release);
+    fn send_event(&self, event: Event) {
+        self.dirty.store(true, Ordering::Release);
+        if matches!(event, Event::ChildExit(_)) {
+            if let Some(cb) = self.on_exit.lock().unwrap().take() {
+                cb();
+            }
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct TerminalWidget {
-    pub da: DrawingArea,
+    pub container: gtk4::Box,
+    da: DrawingArea,
     term: Arc<FairMutex<Term<DirtyFlag>>>,
     sender: EventLoopSender,
     dirty: Arc<AtomicBool>,
     cols: Arc<AtomicUsize>,
     rows: Arc<AtomicUsize>,
+    on_exit: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
+    adjustment: gtk4::Adjustment,
 }
 
 impl TerminalWidget {
@@ -55,8 +75,8 @@ impl TerminalWidget {
         let cols = 80usize;
         let rows = 24usize;
 
-        let dirty_flag = DirtyFlag(Arc::new(AtomicBool::new(true)));
-        let dirty = dirty_flag.0.clone();
+        let dirty_flag = DirtyFlag::new();
+        let dirty = dirty_flag.dirty.clone();
 
         let win_size = WindowSize {
             num_cols: cols as u16,
@@ -92,14 +112,27 @@ impl TerminalWidget {
         da.set_vexpand(true);
         da.set_focusable(true);
 
+        // Shared adjustment between scrollbar and internal scrolling
+        let adjustment = gtk4::Adjustment::new(0.0, 0.0, rows as f64, 1.0, 3.0, rows as f64);
+
+        let scrollbar = Scrollbar::new(gtk4::Orientation::Vertical, Some(&adjustment));
+        scrollbar.set_valign(gtk4::Align::Fill);
+
+        let container = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        container.set_hexpand(true);
+        container.set_vexpand(true);
+        container.append(&da);
+        container.append(&scrollbar);
+
         let cols_a = Arc::new(AtomicUsize::new(cols));
         let rows_a = Arc::new(AtomicUsize::new(rows));
 
-        let widget = Self { da, term, sender, dirty, cols: cols_a, rows: rows_a };
+        let widget = Self { container, da, term, sender, dirty, cols: cols_a, rows: rows_a, on_exit: dirty_flag.on_exit.clone(), adjustment };
         widget.setup_draw();
         widget.setup_keyboard();
         widget.setup_context_menu();
         widget.setup_click_to_focus();
+        widget.setup_scroll();
         widget.setup_redraw_timer();
         widget.setup_resize();
         widget
@@ -117,15 +150,29 @@ impl TerminalWidget {
     fn setup_keyboard(&self) {
         let sender = self.sender.clone();
         let term = self.term.clone();
+        let adj = self.adjustment.clone();
+        let da = self.da.clone();
         let ctrl = EventControllerKey::new();
         ctrl.connect_key_pressed(move |_, kv, _, mods| {
-            // Ctrl+Shift+V — paste from clipboard
+            // Jump to bottom on any key press if scrolled back (except paste)
             if kv == gdk::Key::v
                 && mods.contains(gdk::ModifierType::CONTROL_MASK)
                 && mods.contains(gdk::ModifierType::SHIFT_MASK)
             {
                 paste_from_clipboard(sender.clone(), term.clone());
                 return glib::Propagation::Stop;
+            }
+
+            {
+                let t = term.lock();
+                if t.grid().display_offset() > 0 {
+                    let hist = t.grid().total_lines().saturating_sub(t.grid().screen_lines()) as f64;
+                    drop(t);
+                    term.lock().scroll_display(Scroll::Bottom);
+                    // gtk_value = history - doff, with doff=0 after Bottom
+                    adj.set_value(hist);
+                    da.queue_draw();
+                }
             }
 
             let bytes = key_to_bytes(kv, mods);
@@ -176,10 +223,87 @@ impl TerminalWidget {
         self.da.add_controller(gesture);
     }
 
+    fn setup_scroll(&self) {
+        let term = self.term.clone();
+        let adj = self.adjustment.clone();
+
+
+        // Mouse wheel / touchpad scroll
+        let scroll_ctrl = EventControllerScroll::new(EventControllerScrollFlags::VERTICAL);
+        let t = term.clone();
+        let a = adj.clone();
+        let da = self.da.clone();
+        scroll_ctrl.connect_scroll(move |_ctrl, _dx, dy| {
+            let delta = -(dy.round() as i32);
+            if delta != 0 {
+                t.lock().scroll_display(Scroll::Delta(delta));
+                let (doff, history) = {
+                    let locked = t.lock();
+                    let g = locked.grid();
+                    (g.display_offset(), g.total_lines().saturating_sub(g.screen_lines()) as f64)
+                };
+                // gtk_value = history - display_offset, so
+                //   at bottom (doff=0): gtk = history
+                //   at top   (doff=hist): gtk = 0
+                let gtk_value = (history - doff as f64).max(0.0);
+                a.set_value(gtk_value);
+                da.queue_draw();
+            }
+            glib::Propagation::Stop
+        });
+        self.da.add_controller(scroll_ctrl);
+
+        // Scrollbar drag / click — scroll to absolute position
+        let t = term.clone();
+        let da_sb = self.da.clone();
+        adj.connect_value_changed(move |adj| {
+            let gtk_val = adj.value() as usize;
+            let (doff, total, screen) = {
+                let locked = t.lock();
+                let g = locked.grid();
+                (g.display_offset(), g.total_lines(), g.screen_lines())
+            };
+            let hist = total.saturating_sub(screen);
+            // doff = history - gtk_value, clamp to valid range
+            let target_doff = hist.saturating_sub(gtk_val);
+            if target_doff != doff {
+                t.lock().scroll_display(Scroll::Bottom);
+                t.lock().scroll_display(Scroll::Delta(target_doff as i32));
+                da_sb.queue_draw();
+            }
+        });
+    }
+
     fn setup_redraw_timer(&self) {
         let dirty_flag = self.dirty.clone();
         let da_weak = self.da.downgrade();
+        let term = self.term.clone();
+        let adj = self.adjustment.clone();
+        let rows = self.rows.clone();
         glib::timeout_add_local(Duration::from_millis(16), move || {
+            // Read terminal state under lock, then drop before touching GTK
+            // (which can fire value-changed → lock the same term = deadlock)
+            let (doff, history) = {
+                let t = term.lock();
+                let total = t.grid().total_lines();
+                let screen = t.grid().screen_lines();
+                let h = total.saturating_sub(screen) as f64;
+                (t.grid().display_offset(), h)
+            };
+            let rows_f = rows.load(Ordering::Relaxed) as f64;
+            // GTK adjustment: value=0 at top, value=upper-page_size at bottom.
+            // display_offset=0 (bottom) ↔ gtk_value = history
+            // display_offset=history (top) ↔ gtk_value = 0
+            let gtk_value = (history - doff as f64).max(0.0);
+            let cur_upper = adj.upper();
+            let cur_page = adj.page_size();
+            let target_upper = history + rows_f;
+            if (cur_upper - target_upper).abs() > 0.5 || (cur_page - rows_f).abs() > 0.5 {
+                adj.configure(gtk_value, 0.0, target_upper, 1.0, 3.0, rows_f);
+            } else {
+                adj.set_value(gtk_value);
+            }
+
             if dirty_flag.swap(false, Ordering::AcqRel) {
                 if let Some(da) = da_weak.upgrade() {
                     da.queue_draw();
@@ -214,6 +338,13 @@ impl TerminalWidget {
     pub fn focus(&self) {
         self.da.grab_focus();
     }
+
+    /// Register a callback that fires (on the alacritty event-loop thread)
+    /// when the child process exits. Use `glib::idle_add` to dispatch to the
+    /// GTK main thread from within the callback.
+    pub fn set_on_exit<F: Fn() + Send + 'static>(&self, cb: F) {
+        *self.on_exit.lock().unwrap() = Some(Box::new(cb));
+    }
 }
 
 fn draw_term(
@@ -226,6 +357,7 @@ fn draw_term(
     let content = term.renderable_content();
     let colors = content.colors;
     let cursor_pt = content.cursor.point;
+    let display_offset = content.display_offset;
 
     cr.set_source_rgb(0.08, 0.08, 0.08);
     cr.paint().ok();
@@ -238,14 +370,16 @@ fn draw_term(
     for ic in content.display_iter {
         let col = ic.point.column.0;
         let row = ic.point.line.0;
-        if row < 0 { continue; }
-        let (row, col) = (row as usize, col);
-        if row >= rows || col >= cols { continue; }
+        // Map grid line to screen row using display_offset
+        let screen_row = row + display_offset as i32;
+        if screen_row < 0 || screen_row >= rows as i32 { continue; }
+        if col >= cols { continue; }
 
         let x = col as f64 * CELL_W;
-        let y = row as f64 * CELL_H;
+        let y = screen_row as f64 * CELL_H;
         let cell = &ic.cell;
-        let on_cursor = ic.point == cursor_pt;
+        // Hide cursor when scrolled back
+        let on_cursor = ic.point == cursor_pt && display_offset == 0;
 
         let (br, bg, bb) = if on_cursor { (0.85, 0.85, 0.85) }
             else { resolve(cell.bg, false, colors) };
