@@ -22,6 +22,8 @@ use sizzle_core::{MetadataStore, ScannedProject, scan_projects};
 
 struct ProjectWidgets {
     git_view: TextView,
+    agent_terminal: Option<terminal::TerminalWidget>,
+    shell_terminal: Option<terminal::TerminalWidget>,
 }
 
 struct AppState {
@@ -32,6 +34,7 @@ struct AppState {
     list_box: ListBox,
     active_terminals: HashMap<String, usize>,
     pending_exits: Arc<Mutex<Vec<String>>>,
+    focus_memory: HashMap<String, String>,
 }
 
 type State = Rc<RefCell<AppState>>;
@@ -140,6 +143,7 @@ fn build_ui(app: &Application) {
         list_box: list_box.clone(),
         active_terminals: HashMap::new(),
         pending_exits: Arc::new(Mutex::new(Vec::new())),
+        focus_memory: HashMap::new(),
     }));
 
     populate_list(&state);
@@ -587,17 +591,38 @@ fn select_project(state: &State, path: &str) {
             }
 
             st.project_stack.add_named(&project_box, Some(&path));
-            st.project_widgets.insert(path.clone(), ProjectWidgets { git_view });
+            st.project_widgets.insert(path.clone(), ProjectWidgets {
+                git_view,
+                agent_terminal: None,
+                shell_terminal: None,
+            });
         }
     }
 
-    {
+    // Phase 1: immutable borrow to set visible child + read focus memory
+    let focus_key = {
         let st = state.borrow();
         st.project_stack.set_visible_child_name(&path);
         if let Some(pw) = st.project_widgets.get(&path) {
             update_git_status(&path, &pw.git_view);
         }
         st.store.set_last_launched(&path);
+        st.focus_memory.get(&path).cloned()
+    };
+
+    // Phase 2: restore focus memory
+    // Important: clone the terminal out first, then call focus() outside the borrow,
+    // because focus() triggers the focus-in callback which also borrows state.
+    if let Some(key) = focus_key {
+        let terminal = state.borrow().project_widgets.get(&path).and_then(|pw| {
+            match key.as_str() {
+                "shell" => pw.shell_terminal.clone(),
+                _ => pw.agent_terminal.clone(),
+            }
+        });
+        if let Some(t) = terminal {
+            t.focus();
+        }
     }
 }
 
@@ -925,6 +950,8 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
     let agent = terminal::TerminalWidget::new(Some(path), agent_cmd);
     let shell  = terminal::TerminalWidget::new(Some(path), None);
 
+    let p = path.to_string(); // owned for closures
+
     // Wire up focus tracking: when one terminal gets focus, the other dims.
     // Agent starts focused.
     agent.set_focused(true);
@@ -932,17 +959,23 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
     {
         let a = agent.clone();
         let s = shell.clone();
+        let st = state.clone();
+        let p_clone = p.clone();
         agent.connect_focus_in(move || {
             a.set_focused(true);
             s.set_focused(false);
+            st.borrow_mut().focus_memory.insert(p_clone.clone(), "agent".to_string());
         });
     }
     {
         let a = agent.clone();
         let s = shell.clone();
+        let st = state.clone();
+        let p_clone = p.clone();
         shell.connect_focus_in(move || {
             s.set_focused(true);
             a.set_focused(false);
+            st.borrow_mut().focus_memory.insert(p_clone.clone(), "shell".to_string());
         });
     }
 
@@ -996,6 +1029,12 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
     });
 
     agent.focus();
+
+    // Store terminal references for focus memory restoration when switching back
+    if let Some(pw) = state.borrow_mut().project_widgets.get_mut(path) {
+        pw.agent_terminal = Some(agent);
+        pw.shell_terminal = Some(shell);
+    }
 }
 
 // ── Git status view ────────────────────────────────────────────────────────
