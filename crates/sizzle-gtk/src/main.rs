@@ -8,12 +8,13 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, HeaderBar,
-    Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
-    ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
+    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
+    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
+    ScrolledWindow, Stack, StackTransitionType, StyleContext, TextView, WrapMode,
 };
 
 use sizzle_core::{MetadataStore, ScannedProject, scan_projects};
@@ -29,6 +30,7 @@ struct AppState {
     projects: Vec<ScannedProject>,
     project_widgets: HashMap<String, ProjectWidgets>,
     project_stack: Stack,
+    git_stack: Stack,
     list_box: ListBox,
     active_terminals: HashMap<String, usize>,
     last_terminal_activity: HashMap<String, Vec<Arc<Mutex<Option<Instant>>>>>,
@@ -163,19 +165,27 @@ fn build_ui(app: &Application) {
     project_stack.add_named(&placeholder, Some("__placeholder__"));
     project_stack.set_visible_child_name("__placeholder__");
 
-    let paned = Paned::new(Orientation::Horizontal);
-    paned.set_start_child(Some(&left));
-    paned.set_end_child(Some(&project_stack));
-    paned.set_position(260);
-    paned.set_shrink_start_child(false);
-    paned.set_shrink_end_child(false);
+    let git_stack = Stack::new();
+
+    let inner_paned = Paned::new(Orientation::Horizontal);
+    inner_paned.set_start_child(Some(&project_stack));
+    inner_paned.set_end_child(Some(&git_stack));
+    inner_paned.set_position(700);
+    inner_paned.set_shrink_start_child(false);
+
+    let outer_paned = Paned::new(Orientation::Horizontal);
+    outer_paned.set_start_child(Some(&left));
+    outer_paned.set_end_child(Some(&inner_paned));
+    outer_paned.set_position(260);
+    outer_paned.set_shrink_start_child(false);
+    outer_paned.set_shrink_end_child(false);
 
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Sizzle")
         .default_width(1200)
         .default_height(750)
-        .child(&paned)
+        .child(&outer_paned)
         .build();
     window.set_titlebar(Some(&header));
 
@@ -184,6 +194,7 @@ fn build_ui(app: &Application) {
         projects,
         project_widgets: HashMap::new(),
         project_stack: project_stack.clone(),
+        git_stack: git_stack.clone(),
         list_box: list_box.clone(),
         active_terminals: HashMap::new(),
         last_terminal_activity: HashMap::new(),
@@ -309,6 +320,17 @@ fn build_ui(app: &Application) {
             }
             glib::ControlFlow::Continue
         });
+    }
+
+    // ── Dark background for the git status pane ──────────────────────────
+    let css_provider = CssProvider::new();
+    css_provider.load_from_data(
+        ".git-pane { background: #1e1e2e; }
+         .git-pane textview text { background: #1e1e2e; color: #cdd6f4; }
+         .git-pane label { color: #cdd6f4; }",
+    );
+    if let Some(display) = gdk::Display::default() {
+        StyleContext::add_provider_for_display(&display, &css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
 
     window.present();
@@ -615,20 +637,36 @@ fn select_project(state: &State, path: &str) {
             top_bar.append(&spacer);
             top_bar.append(&btn_box);
 
-            // ── Git status strip ───────────────────────────────────────────
+            // ── Git status strip (right pane) ─────────────────────────
             let git_view = make_git_view();
+            git_view.add_css_class("git-pane");
             let git_scroll = ScrolledWindow::builder()
                 .hscrollbar_policy(gtk4::PolicyType::Automatic)
                 .vscrollbar_policy(gtk4::PolicyType::Automatic)
-                .min_content_height(90)
-                .max_content_height(90)
+                .hexpand(true)
+                .vexpand(true)
                 .build();
+            git_scroll.add_css_class("git-pane");
             git_scroll.set_child(Some(&git_view));
+
+            let git_container = GtkBox::new(Orientation::Vertical, 0);
+            git_container.add_css_class("git-pane");
+            let git_header = Label::builder()
+                .label("Git Status")
+                .halign(gtk4::Align::Start)
+                .margin_start(8)
+                .margin_top(6)
+                .margin_bottom(2)
+                .build();
+            git_header.add_css_class("git-pane");
+            git_container.append(&git_header);
+            git_container.append(&git_scroll);
+
+            st.git_stack.add_named(&git_container, Some(&path));
 
             let project_box = GtkBox::new(Orientation::Vertical, 0);
             project_box.append(&top_bar);
             project_box.append(&notebook);
-            project_box.append(&git_scroll);
 
             // ── Connect launch buttons ─────────────────────────────────────
             {
@@ -672,6 +710,7 @@ fn select_project(state: &State, path: &str) {
     {
         let st = state.borrow();
         st.project_stack.set_visible_child_name(&path);
+        st.git_stack.set_visible_child_name(&path);
         if let Some(pw) = st.project_widgets.get(&path) {
             update_git_status(&path, &pw.git_view);
         }
