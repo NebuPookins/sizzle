@@ -60,10 +60,11 @@ The middle dividing bar should itself contain tabs. At first, there will be
 only one tab, labeled "Shell 1". There is also a button to create new
 shells, which creates a new tab and a corresponding terminal and shell
 process. The user can click on the different tabs to switch between the
-different shells.
+different shells. The currently active tab should be highlighted.
 
 The user can also drag the middle dividing bar up and down to resize the
-top and bottom panels.
+top and bottom panels. Hovering over this middle bar should change the mouse
+cursor to indicate that resizing is possible.
 
 If there are multiple shell tabs, then the tabs have a small "Close" button
 which the user can click on to close those tabs. The user can also press
