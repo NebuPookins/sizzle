@@ -151,19 +151,33 @@ fn build_ui(app: &Application) {
     {
         let state = state.clone();
         search.connect_changed(move |entry| {
-            let query = entry.text().to_lowercase();
+            let query = entry.text();
+            let query_lower = query.to_lowercase();
+            let case_sensitive = query.chars().any(|c| c.is_uppercase());
             let st = state.borrow();
             let mut i = 0;
             while let Some(row) = st.list_box.row_at_index(i) {
-                let label_text = row.child()
-                    .and_downcast::<GtkBox>()
-                    .and_then(|b| b.first_child())
-                    .and_downcast::<GtkBox>()
-                    .and_then(|b| b.first_child())
-                    .and_downcast::<Label>()
-                    .map(|l| l.text().to_lowercase())
-                    .unwrap_or_default();
-                row.set_visible(query.is_empty() || label_text.contains(&query as &str));
+                let path = row.widget_name();
+                // Match against project data directly instead of navigating widget children,
+                // which fails when a dot DrawingArea is prepended for active projects.
+                let visible = if query.is_empty() {
+                    true
+                } else {
+                    st.projects.iter().find(|p| p.path == path).map_or(false, |p| {
+                        let tag = p.detected_tags.first().map(|t| t.name.as_str()).unwrap_or("");
+                        let label = if tag.is_empty() {
+                            p.name.clone()
+                        } else {
+                            format!("{} [{}]", p.name, tag)
+                        };
+                        if case_sensitive {
+                            label.contains(query.as_str())
+                        } else {
+                            label.to_lowercase().contains(&query_lower as &str)
+                        }
+                    })
+                };
+                row.set_visible(visible);
                 i += 1;
             }
         });
@@ -212,6 +226,15 @@ fn build_ui(app: &Application) {
                         }
                     }
                 }
+                drop(s);
+                populate_list(&state_for_exits);
+            }
+        }
+
+        // Refresh project list periodically so terminal busy/idle dot colors update
+        {
+            let s = state_for_exits.borrow();
+            if !s.active_terminals.is_empty() {
                 drop(s);
                 populate_list(&state_for_exits);
             }
@@ -279,11 +302,12 @@ fn populate_list(state: &State) {
 
     let mut sorted: Vec<&ScannedProject> = st.projects.iter().collect();
     sorted.sort_by_key(|p| {
+        let is_active = st.active_terminals.contains_key(&p.path);
         let meta = all_meta.get(&p.path);
         let marker_key = marker_sort_key(meta.and_then(|m| m.marker.as_deref()));
         let time_key = Reverse(meta.and_then(|m| m.last_launched));
         let name_key = p.name.to_lowercase();
-        (marker_key, time_key, name_key)
+        (!is_active, marker_key, time_key, name_key)
     });
 
     for project in sorted {
@@ -344,16 +368,20 @@ fn populate_list(state: &State) {
 
         let row_box = GtkBox::new(Orientation::Horizontal, 0);
 
-        // Green dot for active (has running terminals) projects
+        // Green/yellow dot for active (has running terminals) projects
         if st.active_terminals.contains_key(&project.path) {
+            let is_busy = st.project_widgets.get(&project.path).map_or(false, |pw| {
+                pw.agent_terminal.as_ref().map_or(false, |t| !t.is_idle())
+            });
+            let (r, g, b) = if is_busy { (1.0, 0.8, 0.0) } else { (0.31, 0.98, 0.48) };
             let dot = DrawingArea::new();
             dot.set_size_request(8, 8);
             dot.set_valign(gtk4::Align::Center);
             dot.set_margin_start(8);
-            dot.set_draw_func(|_, cr, w, h| {
-                let r = (w.min(h) as f64 / 2.0).min(4.0);
-                cr.set_source_rgb(0.31, 0.98, 0.48); // #50fa7b green
-                cr.arc(w as f64 / 2.0, h as f64 / 2.0, r - 0.5, 0.0, 2.0 * std::f64::consts::PI);
+            dot.set_draw_func(move |_, cr, w, h| {
+                let radius = (w.min(h) as f64 / 2.0).min(4.0);
+                cr.set_source_rgb(r, g, b);
+                cr.arc(w as f64 / 2.0, h as f64 / 2.0, radius - 0.5, 0.0, 2.0 * std::f64::consts::PI);
                 cr.fill().ok();
             });
             row_box.append(&dot);

@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk4::gdk;
 use gtk4::glib;
@@ -40,6 +40,7 @@ impl Dimensions for TermSize {
 #[derive(Clone)]
 pub struct DirtyFlag {
     pub dirty: Arc<AtomicBool>,
+    last_write_time: Arc<Mutex<Instant>>,
     on_exit: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
     write_fn: Arc<Mutex<Option<Box<dyn Fn(Vec<u8>) + Send>>>>,
 }
@@ -48,9 +49,15 @@ impl DirtyFlag {
     pub fn new() -> Self {
         Self {
             dirty: Arc::new(AtomicBool::new(true)),
+            last_write_time: Arc::new(Mutex::new(Instant::now())),
             on_exit: Arc::new(Mutex::new(None)),
             write_fn: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Returns true if no PtyWrite has been received in the last 5 seconds.
+    pub fn is_idle(&self) -> bool {
+        self.last_write_time.lock().unwrap().elapsed() > Duration::from_secs(5)
     }
 
     pub fn set_write_fn<F: Fn(Vec<u8>) + Send + 'static>(&self, f: F) {
@@ -68,6 +75,7 @@ impl EventListener for DirtyFlag {
                 }
             }
             Event::PtyWrite(text) => {
+                *self.last_write_time.lock().unwrap() = Instant::now();
                 if let Some(ref wf) = *self.write_fn.lock().unwrap() {
                     wf(text.into_bytes());
                 }
@@ -89,6 +97,7 @@ pub struct TerminalWidget {
     on_exit: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
     adjustment: gtk4::Adjustment,
     focused: Arc<AtomicBool>,
+    idle_flag: DirtyFlag,
 }
 
 impl TerminalWidget {
@@ -152,7 +161,8 @@ impl TerminalWidget {
         let cols_a = Arc::new(AtomicUsize::new(cols));
         let rows_a = Arc::new(AtomicUsize::new(rows));
 
-        let widget = Self { container, da, term, sender, dirty, cols: cols_a, rows: rows_a, on_exit: dirty_flag.on_exit.clone(), adjustment, focused: Arc::new(AtomicBool::new(false)) };
+        let idle_store = dirty_flag.clone();
+        let widget = Self { container, da, term, sender, dirty, cols: cols_a, rows: rows_a, on_exit: dirty_flag.on_exit.clone(), adjustment, focused: Arc::new(AtomicBool::new(false)), idle_flag: idle_store };
         widget.setup_draw();
         widget.setup_keyboard();
         widget.setup_context_menu();
@@ -504,6 +514,11 @@ impl TerminalWidget {
     pub fn set_focused(&self, focused: bool) {
         self.focused.store(focused, Ordering::Release);
         self.da.queue_draw();
+    }
+
+    /// Returns true if no PtyWrite received in the last 5 seconds (heuristic for idle agent).
+    pub fn is_idle(&self) -> bool {
+        self.idle_flag.is_idle()
     }
 
     /// Returns whether this terminal currently has focus.
