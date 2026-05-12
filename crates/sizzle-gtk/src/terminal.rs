@@ -41,6 +41,7 @@ impl Dimensions for TermSize {
 pub struct DirtyFlag {
     pub dirty: Arc<AtomicBool>,
     on_exit: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
+    write_fn: Arc<Mutex<Option<Box<dyn Fn(Vec<u8>) + Send>>>>,
 }
 
 impl DirtyFlag {
@@ -48,17 +49,30 @@ impl DirtyFlag {
         Self {
             dirty: Arc::new(AtomicBool::new(true)),
             on_exit: Arc::new(Mutex::new(None)),
+            write_fn: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn set_write_fn<F: Fn(Vec<u8>) + Send + 'static>(&self, f: F) {
+        *self.write_fn.lock().unwrap() = Some(Box::new(f));
     }
 }
 
 impl EventListener for DirtyFlag {
     fn send_event(&self, event: Event) {
         self.dirty.store(true, Ordering::Release);
-        if matches!(event, Event::ChildExit(_)) {
-            if let Some(cb) = self.on_exit.lock().unwrap().take() {
-                cb();
+        match event {
+            Event::ChildExit(_) => {
+                if let Some(cb) = self.on_exit.lock().unwrap().take() {
+                    cb();
+                }
             }
+            Event::PtyWrite(text) => {
+                if let Some(ref wf) = *self.write_fn.lock().unwrap() {
+                    wf(text.into_bytes());
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -111,6 +125,10 @@ impl TerminalWidget {
         let ev_loop = EventLoop::new(term.clone(), dirty_flag.clone(), pty, false, false)
             .expect("EventLoop failed");
         let sender = ev_loop.channel();
+        dirty_flag.set_write_fn({
+            let sender = sender.clone();
+            move |bytes| { let _ = sender.send(Msg::Input(bytes.into())); }
+        });
         ev_loop.spawn();
 
         let da = DrawingArea::new();
@@ -680,4 +698,48 @@ fn paste_from_clipboard(sender: EventLoopSender, term: Arc<FairMutex<Term<DirtyF
         }
         let _ = sender.send(Msg::Input(data.into()));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn pty_write_forwards_to_write_fn() {
+        let flag = DirtyFlag::new();
+        let written = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+        flag.set_write_fn({
+            let w = Arc::clone(&written);
+            move |bytes| { w.lock().unwrap().push(bytes); }
+        });
+
+        flag.send_event(Event::PtyWrite("hello".to_string()));
+        let guard = written.lock().unwrap();
+        assert_eq!(guard.len(), 1);
+        assert_eq!(guard[0], b"hello");
+    }
+
+    #[test]
+    fn child_exit_does_not_forward() {
+        let flag = DirtyFlag::new();
+        // If write_fn is called, the test fails
+        flag.set_write_fn(|_| panic!("write_fn must not be called for ChildExit"));
+        flag.send_event(Event::ChildExit(std::process::ExitStatus::from_raw(0)));
+    }
+
+    #[test]
+    fn any_event_sets_dirty_flag() {
+        let flag = DirtyFlag::new();
+        flag.dirty.store(false, Ordering::Release);
+        flag.send_event(Event::PtyWrite("test".to_string()));
+        assert!(flag.dirty.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn pty_write_without_write_fn_does_not_panic() {
+        let flag = DirtyFlag::new();
+        // No write_fn set — should be a no-op, not a panic
+        flag.send_event(Event::PtyWrite("test".to_string()));
+    }
 }
