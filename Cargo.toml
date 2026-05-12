@@ -1,3 +1,12 @@
+[package]
+name = "sizzle"
+version = "0.1.0"
+edition = "2021"
+default-run = "sizzle"
+
+[dependencies]
+sizzle-gtk = { path = "crates/sizzle-gtk" }
+
 [workspace]
 members = [
     "crates/sizzle-core",

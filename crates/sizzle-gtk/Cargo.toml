@@ -7,6 +7,10 @@ edition = "2021"
 name = "sizzle-gtk"
 path = "src/main.rs"
 
+[lib]
+name = "sizzle_gtk"
+path = "src/lib.rs"
+
 [dependencies]
 sizzle-core = { path = "../sizzle-core" }
 gtk4 = { version = "0.9", features = ["v4_10"] }

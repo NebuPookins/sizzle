@@ -4,7 +4,7 @@ Describe the change in a few sentences.
 
 ## Testing
 
-- [ ] `npm run build`
+- [ ] `cargo build --release -p sizzle-gtk`
 - [ ] Manually tested the changed behavior
 
 ## Docs

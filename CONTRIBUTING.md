@@ -12,28 +12,26 @@ Thanks for contributing.
 ```bash
 git clone https://github.com/NebuPookins/sizzle.git
 cd sizzle
-npm install
-npm run dev
+cargo run -p sizzle-gtk
 ```
 
 Notes:
 
-- The **Rust toolchain** must be installed (via [rustup](https://rustup.rs/)) to compile the Tauri backend.
-- Platform Tauri prerequisites are required (system libs on Linux, Xcode on macOS, WebView2 on Windows). See the [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/).
+- The **Rust toolchain** must be installed (via [rustup](https://rustup.rs/)).
+- **GTK4 development libraries** are required on Linux. See the [README](README.md) for platform-specific install commands.
 
 ## Project notes
 
-- Backend entry: `src-tauri/src/lib.rs`
-- Renderer entry: `src/renderer/main.tsx`
-- Front-end API bridge: `src/renderer/api.ts`
-- Tauri commands live under: `src-tauri/src/commands/`
+- Binary entry: `crates/sizzle-gtk/src/main.rs`
+- Core library: `crates/sizzle-core/` (scanner, metadata, files, git)
+- GTK4 UI components live in `crates/sizzle-gtk/src/`
 - Local metadata is stored under `~/.config/sizzle` by default.
 
 This repo also includes agent-assistance files such as `AGENTS.md` and `CLAUDE.md`. They are repository guidance files, not a requirement for contributing.
 
 ## Pull request checklist
 
-- The change builds cleanly with `npm run build`.
+- The change builds cleanly with `cargo build --release -p sizzle-gtk`.
 - New behavior is documented where needed.
 - No secrets, local paths, or personal config were added.
 - The diff does not include unrelated cleanup.
