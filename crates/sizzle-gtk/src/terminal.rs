@@ -8,7 +8,7 @@ use gtk4::gdk;
 use gtk4::glib;
 use gtk4::pango;
 use gtk4::prelude::*;
-use gtk4::{DrawingArea, EventControllerKey, EventControllerScroll, EventControllerScrollFlags, GestureClick, GestureDrag, Popover, Scrollbar};
+use gtk4::{DrawingArea, EventControllerFocus, EventControllerKey, EventControllerScroll, EventControllerScrollFlags, GestureClick, GestureDrag, Popover, Scrollbar};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
@@ -88,6 +88,7 @@ pub struct TerminalWidget {
     rows: Arc<AtomicUsize>,
     on_exit: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
     adjustment: gtk4::Adjustment,
+    focused: Arc<AtomicBool>,
 }
 
 impl TerminalWidget {
@@ -151,7 +152,7 @@ impl TerminalWidget {
         let cols_a = Arc::new(AtomicUsize::new(cols));
         let rows_a = Arc::new(AtomicUsize::new(rows));
 
-        let widget = Self { container, da, term, sender, dirty, cols: cols_a, rows: rows_a, on_exit: dirty_flag.on_exit.clone(), adjustment };
+        let widget = Self { container, da, term, sender, dirty, cols: cols_a, rows: rows_a, on_exit: dirty_flag.on_exit.clone(), adjustment, focused: Arc::new(AtomicBool::new(false)) };
         widget.setup_draw();
         widget.setup_keyboard();
         widget.setup_context_menu();
@@ -167,8 +168,9 @@ impl TerminalWidget {
         let term_draw = self.term.clone();
         let cols = self.cols.clone();
         let rows = self.rows.clone();
+        let focused = self.focused.clone();
         self.da.set_draw_func(move |_da, cr, _w, _h| {
-            draw_term(&term_draw, cr, cols.load(Ordering::Relaxed), rows.load(Ordering::Relaxed));
+            draw_term(&term_draw, cr, cols.load(Ordering::Relaxed), rows.load(Ordering::Relaxed), focused.load(Ordering::Acquire));
         });
     }
 
@@ -477,6 +479,27 @@ impl TerminalWidget {
     pub fn set_on_exit<F: Fn() + Send + 'static>(&self, cb: F) {
         *self.on_exit.lock().unwrap() = Some(Box::new(cb));
     }
+
+    /// Mark this terminal as focused or unfocused, causing a visual dim when unfocused.
+    pub fn set_focused(&self, focused: bool) {
+        self.focused.store(focused, Ordering::Release);
+        self.da.queue_draw();
+    }
+
+    /// Returns whether this terminal currently has focus.
+    #[allow(dead_code)]
+    pub fn is_focused(&self) -> bool {
+        self.focused.load(Ordering::Acquire)
+    }
+
+    /// Connect a callback for when this terminal gains focus.
+    pub fn connect_focus_in<F: Fn() + 'static>(&self, f: F) {
+        let focus_ctrl = EventControllerFocus::new();
+        focus_ctrl.connect_enter(move |_| {
+            f();
+        });
+        self.da.add_controller(focus_ctrl);
+    }
 }
 
 fn draw_term(
@@ -484,6 +507,7 @@ fn draw_term(
     cr: &gtk4::cairo::Context,
     cols: usize,
     rows: usize,
+    focused: bool,
 ) {
     let term = term.lock();
     let content = term.renderable_content();
@@ -548,6 +572,15 @@ fn draw_term(
         pangocairo::functions::show_layout(cr, &layout);
 
         if bold || italic { layout.set_font_description(Some(&base_font)); }
+    }
+
+    // Dim unfocused terminals with a semi-transparent overlay
+    if !focused {
+        let w = cols as f64 * CELL_W;
+        let h = rows as f64 * CELL_H;
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.35);
+        cr.rectangle(0.0, 0.0, w, h);
+        cr.fill().ok();
     }
 }
 
