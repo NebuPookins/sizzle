@@ -51,7 +51,30 @@ fn main() {
         .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
         .build();
     app.connect_activate(build_ui);
+    install_app_icon();
     app.run();
+}
+
+/// Install the app icon to the user's XDG icon theme directory on first run so
+/// `WindowExt::set_icon_name` can resolve it.
+fn install_app_icon() {
+    use std::path::PathBuf;
+
+    let svg_data = include_bytes!("../../../assets/icons/app-icon.svg");
+    let icon_name = "net.nebupookins.sizzle";
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            PathBuf::from(home).join(".local/share")
+        });
+    let icon_dir = data_home.join("icons/hicolor/scalable/apps");
+    let icon_path = icon_dir.join(format!("{icon_name}.svg"));
+    if icon_path.exists() {
+        return;
+    }
+    std::fs::create_dir_all(&icon_dir).ok();
+    let _ = std::fs::write(&icon_path, svg_data);
 }
 
 // ── Config dir ────────────────────────────────────────────────────────────
@@ -191,6 +214,7 @@ fn build_ui(app: &Application) {
         .child(&outer_paned)
         .build();
     window.set_titlebar(Some(&header));
+    window.set_icon_name(Some("net.nebupookins.sizzle"));
 
     let state = Rc::new(RefCell::new(AppState {
         store: store.clone(),
