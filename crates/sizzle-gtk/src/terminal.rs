@@ -227,15 +227,17 @@ impl TerminalWidget {
     fn setup_context_menu(&self) {
         let sender = self.sender.clone();
         let term = self.term.clone();
-        let da = self.da.clone();
+        let container = self.container.clone();
 
         let gesture = GestureClick::new();
         gesture.set_button(3);
-        gesture.connect_pressed(move |_, _, _, _| {
+        gesture.connect_pressed(move |_, _, x, y| {
             let popover = Popover::new();
-            let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            popover.set_has_arrow(false);
 
             let copy_btn = gtk4::Button::with_label("Copy");
+            copy_btn.set_has_frame(false);
+            copy_btn.add_css_class("menu");
             {
                 let t = term.clone();
                 let popover = popover.clone();
@@ -244,9 +246,10 @@ impl TerminalWidget {
                     popover.popdown();
                 });
             }
-            vbox.append(&copy_btn);
 
             let paste_btn = gtk4::Button::with_label("Paste");
+            paste_btn.set_has_frame(false);
+            paste_btn.add_css_class("menu");
             let s = sender.clone();
             let t = term.clone();
             paste_btn.connect_clicked({
@@ -256,13 +259,19 @@ impl TerminalWidget {
                     popover.popdown();
                 }
             });
+
+            let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+            vbox.add_css_class("menu");
+            vbox.append(&copy_btn);
             vbox.append(&paste_btn);
 
             popover.set_child(Some(&vbox));
-            popover.set_parent(&da);
+            let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+            popover.set_pointing_to(Some(&rect));
+            popover.set_parent(&container);
             popover.popup();
         });
-        self.da.add_controller(gesture);
+        self.container.add_controller(gesture);
     }
 
     fn setup_selection(&self) {
