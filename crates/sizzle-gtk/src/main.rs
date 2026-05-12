@@ -12,7 +12,7 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, HeaderBar,
-    Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, Popover,
+    Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
     ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
 };
 
@@ -90,33 +90,12 @@ fn build_ui(app: &Application) {
         .build();
     scroll.set_child(Some(&list_box));
 
-    // ── Settings popover ────────────────────────────────────────────────────
-    let settings_popover = Popover::new();
-    let settings_vbox = GtkBox::new(Orientation::Vertical, 0);
-    let scan_settings_item = Button::with_label("Add scan folder…");
-    scan_settings_item.set_has_frame(false);
-    scan_settings_item.set_halign(gtk4::Align::Start);
-    scan_settings_item.set_margin_start(4);
-    scan_settings_item.set_margin_end(4);
-    scan_settings_item.set_margin_top(2);
-    scan_settings_item.set_margin_bottom(2);
-    let agent_presets_item = Button::with_label("Agent presets…");
-    agent_presets_item.set_has_frame(false);
-    agent_presets_item.set_halign(gtk4::Align::Start);
-    agent_presets_item.set_margin_start(4);
-    agent_presets_item.set_margin_end(4);
-    agent_presets_item.set_margin_top(2);
-    agent_presets_item.set_margin_bottom(2);
-    settings_vbox.append(&scan_settings_item);
-    settings_vbox.append(&agent_presets_item);
-    settings_popover.set_child(Some(&settings_vbox));
-
+    // ── Settings button opens a modal window ─────────────────────────────────
     let settings_btn = Button::with_label("⚙ Settings");
     settings_btn.set_has_frame(false);
     settings_btn.set_margin_start(6);
     settings_btn.set_margin_top(4);
     settings_btn.set_margin_bottom(6);
-    settings_popover.set_parent(&settings_btn);
 
     let scan_btn = Button::with_label("Add folder…");
     scan_btn.set_margin_end(6);
@@ -245,34 +224,11 @@ fn build_ui(app: &Application) {
     }
 
     {
-        let popover = settings_popover.clone();
-        settings_btn.connect_clicked(move |_| {
-            popover.popup();
-        });
-    }
-
-    {
         let state = state.clone();
         let window_weak = window.downgrade();
-        let popover = settings_popover.clone();
-        scan_settings_item.connect_clicked(move |_| {
-            popover.popdown();
+        settings_btn.connect_clicked(move |_| {
             let Some(win) = window_weak.upgrade() else { return };
-            pick_folder_and_scan(&state, &win);
-        });
-    }
-
-    {
-        let popover = settings_popover.clone();
-        agent_presets_item.connect_clicked(move |_| {
-            popover.popdown();
-            let dialog = gtk4::MessageDialog::builder()
-                .buttons(gtk4::ButtonsType::Ok)
-                .text("Agent presets")
-                .secondary_text("Edit agent presets in ~/.config/sizzle/db.json\nor use the Tauri UI for now.")
-                .build();
-            dialog.connect_response(|d, _| d.close());
-            dialog.present();
+            show_settings_window(&win, &state);
         });
     }
 
@@ -1209,6 +1165,61 @@ fn pick_folder_and_scan(state: &State, window: &ApplicationWindow) {
         }
         populate_list(&state);
     });
+}
+
+// ── Settings modal window ──────────────────────────────────────────────────
+
+fn show_settings_window(parent: &ApplicationWindow, state: &State) {
+    let win = ApplicationWindow::builder()
+        .application(parent.application().as_ref().unwrap())
+        .title("Settings")
+        .modal(true)
+        .transient_for(parent)
+        .default_width(320)
+        .build();
+
+    let state = (*state).clone();
+    let parent = parent.clone();
+    let win2 = win.downgrade();
+
+    let add_folder_btn = Button::with_label("Add scan folder…");
+    add_folder_btn.set_halign(gtk4::Align::Fill);
+    add_folder_btn.set_hexpand(true);
+    let state_a = state.clone();
+    let parent_a = parent.clone();
+    add_folder_btn.connect_clicked(move |_| {
+        let Some(win) = win2.upgrade() else { return };
+        win.close();
+        pick_folder_and_scan(&state_a, &parent_a);
+    });
+
+    let win3 = win.downgrade();
+    let agent_presets_btn = Button::with_label("Agent presets…");
+    agent_presets_btn.set_halign(gtk4::Align::Fill);
+    agent_presets_btn.set_hexpand(true);
+    agent_presets_btn.connect_clicked(move |_| {
+        let Some(win) = win3.upgrade() else { return };
+        win.close();
+        let dialog = gtk4::MessageDialog::builder()
+            .buttons(gtk4::ButtonsType::Ok)
+            .transient_for(&parent)
+            .text("Agent presets")
+            .secondary_text("Edit agent presets in ~/.config/sizzle/db.json\nor use the Tauri UI for now.")
+            .build();
+        dialog.connect_response(|d, _| d.close());
+        dialog.present();
+    });
+
+    let vbox = GtkBox::new(Orientation::Vertical, 8);
+    vbox.set_margin_start(16);
+    vbox.set_margin_end(16);
+    vbox.set_margin_top(16);
+    vbox.set_margin_bottom(16);
+    vbox.append(&add_folder_btn);
+    vbox.append(&agent_presets_btn);
+
+    win.set_child(Some(&vbox));
+    win.present();
 }
 
 // ── Memory usage ──────────────────────────────────────────────────────────
