@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk4::gdk;
 use gtk4::glib;
@@ -88,6 +88,7 @@ pub struct TerminalWidget {
     rows: Arc<AtomicUsize>,
     on_exit: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
     adjustment: gtk4::Adjustment,
+    last_activity: Arc<Mutex<Option<Instant>>>,
 }
 
 impl TerminalWidget {
@@ -125,9 +126,14 @@ impl TerminalWidget {
         let ev_loop = EventLoop::new(term.clone(), dirty_flag.clone(), pty, false, false)
             .expect("EventLoop failed");
         let sender = ev_loop.channel();
+        let last_activity = Arc::new(Mutex::new(None::<Instant>));
+        let last_activity_clone = last_activity.clone();
         dirty_flag.set_write_fn({
             let sender = sender.clone();
-            move |bytes| { let _ = sender.send(Msg::Input(bytes.into())); }
+            move |bytes| {
+                *last_activity_clone.lock().unwrap() = Some(Instant::now());
+                let _ = sender.send(Msg::Input(bytes.into()));
+            }
         });
         ev_loop.spawn();
 
@@ -151,7 +157,7 @@ impl TerminalWidget {
         let cols_a = Arc::new(AtomicUsize::new(cols));
         let rows_a = Arc::new(AtomicUsize::new(rows));
 
-        let widget = Self { container, da, term, sender, dirty, cols: cols_a, rows: rows_a, on_exit: dirty_flag.on_exit.clone(), adjustment };
+        let widget = Self { container, da, term, sender, dirty, cols: cols_a, rows: rows_a, on_exit: dirty_flag.on_exit.clone(), adjustment, last_activity };
         widget.setup_draw();
         widget.setup_keyboard();
         widget.setup_context_menu();
@@ -467,6 +473,11 @@ impl TerminalWidget {
     /// GTK main thread from within the callback.
     pub fn set_on_exit<F: Fn() + Send + 'static>(&self, cb: F) {
         *self.on_exit.lock().unwrap() = Some(Box::new(cb));
+    }
+
+    /// Returns a shared reference to the timestamp of the last PTY output.
+    pub fn last_activity(&self) -> Arc<Mutex<Option<Instant>>> {
+        self.last_activity.clone()
     }
 }
 
