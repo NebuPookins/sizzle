@@ -8,7 +8,7 @@ use gtk4::gdk;
 use gtk4::glib;
 use gtk4::pango;
 use gtk4::prelude::*;
-use gtk4::{DrawingArea, EventControllerKey, EventControllerScroll, EventControllerScrollFlags, GestureClick, GestureDrag, Popover, Scrollbar};
+use gtk4::{DrawingArea, EventControllerFocus, EventControllerKey, EventControllerScroll, EventControllerScrollFlags, GestureClick, GestureDrag, Popover, Scrollbar};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
@@ -157,6 +157,7 @@ impl TerminalWidget {
         widget.setup_context_menu();
         widget.setup_selection();
         widget.setup_click_to_focus();
+        widget.setup_focus_events();
         widget.setup_scroll();
         widget.setup_redraw_timer();
         widget.setup_resize();
@@ -350,6 +351,25 @@ impl TerminalWidget {
             da.grab_focus();
         });
         self.da.add_controller(gesture);
+    }
+
+    fn setup_focus_events(&self) {
+        let sender = self.sender.clone();
+        let term = self.term.clone();
+        let focus_ctrl = EventControllerFocus::new();
+        focus_ctrl.connect_enter(move |_| {
+            if term.lock().mode().contains(TermMode::FOCUS_IN_OUT) {
+                let _ = sender.send(Msg::Input(b"\x1b[I".to_vec().into()));
+            }
+        });
+        let sender = self.sender.clone();
+        let term = self.term.clone();
+        focus_ctrl.connect_leave(move |_| {
+            if term.lock().mode().contains(TermMode::FOCUS_IN_OUT) {
+                let _ = sender.send(Msg::Input(b"\x1b[O".to_vec().into()));
+            }
+        });
+        self.da.add_controller(focus_ctrl);
     }
 
     fn setup_scroll(&self) {
