@@ -211,6 +211,41 @@ impl TerminalWidget {
                 return glib::Propagation::Stop;
             }
 
+            // Shift+PageUp / Shift+PageDown → scroll terminal history by one page
+            if shift {
+                let page_lines = {
+                    let t = term.lock();
+                    t.grid().screen_lines() as i32
+                };
+                match kv {
+                    gdk::Key::Page_Up if page_lines > 0 => {
+                        term.lock().selection = None;
+                        term.lock().scroll_display(Scroll::Delta(page_lines));
+                        let (doff, history) = {
+                            let locked = term.lock();
+                            let g = locked.grid();
+                            (g.display_offset(), g.total_lines().saturating_sub(g.screen_lines()) as f64)
+                        };
+                        adj.set_value((history - doff as f64).max(0.0));
+                        da.queue_draw();
+                        return glib::Propagation::Stop;
+                    }
+                    gdk::Key::Page_Down if page_lines > 0 => {
+                        term.lock().selection = None;
+                        term.lock().scroll_display(Scroll::Delta(-page_lines));
+                        let (doff, history) = {
+                            let locked = term.lock();
+                            let g = locked.grid();
+                            (g.display_offset(), g.total_lines().saturating_sub(g.screen_lines()) as f64)
+                        };
+                        adj.set_value((history - doff as f64).max(0.0));
+                        da.queue_draw();
+                        return glib::Propagation::Stop;
+                    }
+                    _ => {}
+                }
+            }
+
             // Jump to bottom on any key press if scrolled back
             {
                 let t = term.lock();
