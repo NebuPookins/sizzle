@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk4::glib;
 use gtk4::prelude::*;
@@ -33,6 +33,7 @@ struct AppState {
     project_stack: Stack,
     list_box: ListBox,
     active_terminals: HashMap<String, usize>,
+    last_terminal_activity: HashMap<String, Vec<Arc<Mutex<Option<Instant>>>>>,
     pending_exits: Arc<Mutex<Vec<String>>>,
     focus_memory: HashMap<String, String>,
 }
@@ -76,8 +77,6 @@ fn build_ui(app: &Application) {
     };
 
     let header = HeaderBar::new();
-    let mem_label = Label::new(Some("Mem: –"));
-    header.pack_end(&mem_label);
 
     let search = Entry::builder()
         .placeholder_text("Search projects…")
@@ -94,16 +93,64 @@ fn build_ui(app: &Application) {
         .build();
     scroll.set_child(Some(&list_box));
 
+    // ── Settings button opens a modal window ─────────────────────────────────
+    let settings_btn = Button::with_label("⚙ Settings");
+    settings_btn.set_has_frame(false);
+    settings_btn.set_margin_start(6);
+    settings_btn.set_margin_top(4);
+    settings_btn.set_margin_bottom(6);
+
     let scan_btn = Button::with_label("Add folder…");
-    scan_btn.set_margin_start(6);
     scan_btn.set_margin_end(6);
     scan_btn.set_margin_top(4);
     scan_btn.set_margin_bottom(6);
 
+    let btn_row = GtkBox::new(Orientation::Horizontal, 0);
+    btn_row.append(&settings_btn);
+    btn_row.append(&scan_btn);
+
+    // ── Memory breakdown widget ────────────────────────────────────────────
+    let mem_total_lbl = Label::builder()
+        .label("Memory: –")
+        .halign(gtk4::Align::Start)
+        .margin_start(8)
+        .margin_end(8)
+        .margin_top(2)
+        .build();
+    mem_total_lbl.add_css_class("caption");
+    let mem_app_lbl = Label::builder()
+        .label("")
+        .halign(gtk4::Align::Start)
+        .margin_start(8)
+        .margin_end(8)
+        .build();
+    mem_app_lbl.add_css_class("caption");
+    let mem_agent_lbl = Label::builder()
+        .label("")
+        .halign(gtk4::Align::Start)
+        .margin_start(8)
+        .margin_end(8)
+        .margin_bottom(4)
+        .build();
+    mem_agent_lbl.add_css_class("caption");
+    let mem_vbox = GtkBox::new(Orientation::Vertical, 0);
+    mem_vbox.append(&mem_total_lbl);
+    mem_vbox.append(&mem_app_lbl);
+    mem_vbox.append(&mem_agent_lbl);
+
+    // Hide the memory box until we have data
+    let mem_sep = gtk4::Separator::new(Orientation::Horizontal);
+    mem_sep.set_margin_start(4);
+    mem_sep.set_margin_end(4);
+    mem_vbox.set_visible(false);
+    mem_sep.set_visible(false);
+
     let left = GtkBox::new(Orientation::Vertical, 0);
     left.append(&search);
     left.append(&scroll);
-    left.append(&scan_btn);
+    left.append(&btn_row);
+    left.append(&mem_sep);
+    left.append(&mem_vbox);
     left.set_size_request(240, -1);
 
     let project_stack = Stack::builder()
@@ -142,6 +189,7 @@ fn build_ui(app: &Application) {
         project_stack: project_stack.clone(),
         list_box: list_box.clone(),
         active_terminals: HashMap::new(),
+        last_terminal_activity: HashMap::new(),
         pending_exits: Arc::new(Mutex::new(Vec::new())),
         focus_memory: HashMap::new(),
     }));
@@ -194,6 +242,15 @@ fn build_ui(app: &Application) {
     {
         let state = state.clone();
         let window_weak = window.downgrade();
+        settings_btn.connect_clicked(move |_| {
+            let Some(win) = window_weak.upgrade() else { return };
+            show_settings_window(&win, &state);
+        });
+    }
+
+    {
+        let state = state.clone();
+        let window_weak = window.downgrade();
         scan_btn.connect_clicked(move |_| {
             let Some(win) = window_weak.upgrade() else { return };
             pick_folder_and_scan(&state, &win);
@@ -223,6 +280,7 @@ fn build_ui(app: &Application) {
                         *n -= 1;
                         if *n == 0 {
                             s.active_terminals.remove(&path);
+                            s.last_terminal_activity.remove(&path);
                         }
                     }
                 }
@@ -231,7 +289,7 @@ fn build_ui(app: &Application) {
             }
         }
 
-        // Refresh project list periodically so terminal busy/idle dot colors update
+        // Refresh status dots (yellow/green) while terminals are active
         {
             let s = state_for_exits.borrow();
             if !s.active_terminals.is_empty() {
@@ -240,8 +298,15 @@ fn build_ui(app: &Application) {
             }
         }
 
-        if let Some(mb) = read_mem_mb() {
-            mem_label.set_text(&format!("Mem: {} MB", mb));
+        if let Some((app_kb, agent_kb)) = read_mem_breakdown() {
+            let total_mb = (app_kb + agent_kb) / 1024;
+            let app_mb = app_kb / 1024;
+            let agent_mb = agent_kb / 1024;
+            mem_total_lbl.set_text(&format!("Memory   Total: {} MB", total_mb));
+            mem_app_lbl.set_text(&format!("App      {} MB", app_mb));
+            mem_agent_lbl.set_text(&format!("Agents   {} MB", agent_mb));
+            mem_sep.set_visible(true);
+            mem_vbox.set_visible(true);
         }
         glib::ControlFlow::Continue
     });
@@ -283,10 +348,14 @@ fn format_relative_time(last_ms: i64) -> String {
     let secs = ((now_ms - last_ms) / 1000).max(0);
     match secs {
         s if s < 60        => "just now".to_string(),
-        s if s < 3_600     => format!("{}m ago", s / 60),
-        s if s < 86_400    => format!("{}h ago", s / 3_600),
-        s if s < 86_400*14 => format!("{}d ago", s / 86_400),
-        s                  => format!("{}w ago", s / (86_400 * 7)),
+        s if s < 120       => "1 minute ago".to_string(),
+        s if s < 3_600     => format!("{} minutes ago", s / 60),
+        s if s < 7_200     => "1 hour ago".to_string(),
+        s if s < 86_400    => format!("{} hours ago", s / 3_600),
+        s if s < 172_800   => "yesterday".to_string(),
+        s if s < 2_592_000 => format!("{} days ago", s / 86_400),
+        s if s < 5_184_000 => "1 month ago".to_string(),
+        s                  => format!("{} months ago", s / 2_592_000),
     }
 }
 
@@ -315,7 +384,6 @@ fn populate_list(state: &State) {
             .get(&project.path)
             .and_then(|m| m.marker.as_deref())
             .unwrap_or("");
-        let is_favorite = marker == "favorite";
         let is_ignored  = marker == "ignored";
 
         let tag = project.detected_tags.first().map(|t| t.name.as_str()).unwrap_or("");
@@ -353,43 +421,49 @@ fn populate_list(state: &State) {
             info_box.set_opacity(0.45);
         }
 
-        let star_btn = Button::with_label(if is_favorite { "★" } else { "☆" });
-        star_btn.set_has_frame(false);
-        star_btn.set_opacity(if is_favorite { 1.0 } else { 0.35 });
-        star_btn.set_tooltip_text(Some(if is_favorite { "Unfavourite" } else { "Mark as favourite" }));
-        star_btn.set_valign(gtk4::Align::Center);
-
-        let trash_btn = Button::with_label("🗑");
-        trash_btn.set_has_frame(false);
-        trash_btn.set_opacity(if is_ignored { 1.0 } else { 0.35 });
-        trash_btn.set_margin_end(4);
-        trash_btn.set_tooltip_text(Some(if is_ignored { "Unignore" } else { "Ignore project" }));
-        trash_btn.set_valign(gtk4::Align::Center);
+        let (icon, tooltip, marker_opacity) = match marker {
+            "favorite" => ("★", "Mark as ignored", 1.0),
+            "ignored" => ("🗑", "Reset to default", 1.0),
+            _ => ("☆", "Mark as favourite", 0.35),
+        };
+        let marker_btn = Button::with_label(icon);
+        marker_btn.set_has_frame(false);
+        marker_btn.set_opacity(marker_opacity);
+        marker_btn.set_tooltip_text(Some(tooltip));
+        marker_btn.set_valign(gtk4::Align::Center);
+        marker_btn.set_margin_end(4);
 
         let row_box = GtkBox::new(Orientation::Horizontal, 0);
 
-        // Green/yellow dot for active (has running terminals) projects
+        // Status dot: yellow if recent terminal activity, green if idle, hidden if inactive
         if st.active_terminals.contains_key(&project.path) {
-            let is_busy = st.project_widgets.get(&project.path).map_or(false, |pw| {
-                pw.agent_terminal.as_ref().map_or(false, |t| !t.is_idle())
-            });
-            let (r, g, b) = if is_busy { (1.0, 0.8, 0.0) } else { (0.31, 0.98, 0.48) };
+            let has_recent_activity = st.last_terminal_activity.get(&project.path)
+                .map(|activities| {
+                    activities.iter().any(|a| {
+                        a.lock().unwrap().map(|t| t.elapsed() < Duration::from_secs(5)).unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+
             let dot = DrawingArea::new();
             dot.set_size_request(8, 8);
             dot.set_valign(gtk4::Align::Center);
             dot.set_margin_start(8);
             dot.set_draw_func(move |_, cr, w, h| {
-                let radius = (w.min(h) as f64 / 2.0).min(4.0);
-                cr.set_source_rgb(r, g, b);
-                cr.arc(w as f64 / 2.0, h as f64 / 2.0, radius - 0.5, 0.0, 2.0 * std::f64::consts::PI);
+                let r = (w.min(h) as f64 / 2.0).min(4.0);
+                if has_recent_activity {
+                    cr.set_source_rgb(0.95, 0.76, 0.0); // yellow/gold
+                } else {
+                    cr.set_source_rgb(0.31, 0.98, 0.48); // #50fa7b green
+                }
+                cr.arc(w as f64 / 2.0, h as f64 / 2.0, r - 0.5, 0.0, 2.0 * std::f64::consts::PI);
                 cr.fill().ok();
             });
             row_box.append(&dot);
         }
 
         row_box.append(&info_box);
-        row_box.append(&star_btn);
-        row_box.append(&trash_btn);
+        row_box.append(&marker_btn);
 
         let row = ListBoxRow::new();
         row.set_widget_name(&project.path);
@@ -399,27 +473,16 @@ fn populate_list(state: &State) {
         {
             let path = project.path.clone();
             let state = state.clone();
-            star_btn.connect_clicked(move |_| {
+            marker_btn.connect_clicked(move |_| {
                 {
                     let st = state.borrow();
                     let cur = st.store.get_metadata(&path).marker;
-                    let next = if cur.as_deref() == Some("favorite") { None }
-                               else { Some("favorite".to_string()) };
-                    st.store.set_project_marker(&path, next);
-                }
-                populate_list(&state);
-            });
-        }
-
-        {
-            let path = project.path.clone();
-            let state = state.clone();
-            trash_btn.connect_clicked(move |_| {
-                {
-                    let st = state.borrow();
-                    let cur = st.store.get_metadata(&path).marker;
-                    let next = if cur.as_deref() == Some("ignored") { None }
-                               else { Some("ignored".to_string()) };
+                    let next = match cur.as_deref() {
+                        None | Some("") => Some("favorite".to_string()),
+                        Some("favorite") => Some("ignored".to_string()),
+                        Some("ignored") => None,
+                        _ => Some("favorite".to_string()),
+                    };
                     st.store.set_project_marker(&path, next);
                 }
                 populate_list(&state);
@@ -973,15 +1036,24 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
         *st.active_terminals.entry(path.to_string()).or_insert(0) += 2;
         st.pending_exits.clone()
     };
-    populate_list(state);
 
     let agent = terminal::TerminalWidget::new(Some(path), agent_cmd);
     let shell  = terminal::TerminalWidget::new(Some(path), None);
 
     let p = path.to_string(); // owned for closures
 
+    // Store activity timestamps for the status dot
+    {
+        let mut st = state.borrow_mut();
+        st.last_terminal_activity.insert(path.to_string(), vec![
+            agent.last_activity(),
+            shell.last_activity(),
+        ]);
+    }
+
+    populate_list(state);
+
     // Wire up focus tracking: when one terminal gets focus, the other dims.
-    // Agent starts focused.
     agent.set_focused(true);
     shell.set_focused(false);
     {
@@ -1006,7 +1078,6 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
             st.borrow_mut().focus_memory.insert(p_clone.clone(), "shell".to_string());
         });
     }
-
     // When either terminal's child process exits, push to pending_exits so the
     // periodic timer can decrement the counter and refresh the list.
     {
@@ -1167,15 +1238,146 @@ fn pick_folder_and_scan(state: &State, window: &ApplicationWindow) {
     });
 }
 
+// ── Settings modal window ──────────────────────────────────────────────────
+
+fn show_settings_window(parent: &ApplicationWindow, state: &State) {
+    let win = ApplicationWindow::builder()
+        .application(parent.application().as_ref().unwrap())
+        .title("Settings")
+        .modal(true)
+        .transient_for(parent)
+        .default_width(320)
+        .build();
+
+    let state = (*state).clone();
+    let parent = parent.clone();
+    let win2 = win.downgrade();
+
+    let add_folder_btn = Button::with_label("Add scan folder…");
+    add_folder_btn.set_halign(gtk4::Align::Fill);
+    add_folder_btn.set_hexpand(true);
+    let state_a = state.clone();
+    let parent_a = parent.clone();
+    add_folder_btn.connect_clicked(move |_| {
+        let Some(win) = win2.upgrade() else { return };
+        win.close();
+        pick_folder_and_scan(&state_a, &parent_a);
+    });
+
+    let win3 = win.downgrade();
+    let agent_presets_btn = Button::with_label("Agent presets…");
+    agent_presets_btn.set_halign(gtk4::Align::Fill);
+    agent_presets_btn.set_hexpand(true);
+    agent_presets_btn.connect_clicked(move |_| {
+        let Some(win) = win3.upgrade() else { return };
+        win.close();
+        let dialog = gtk4::MessageDialog::builder()
+            .buttons(gtk4::ButtonsType::Ok)
+            .transient_for(&parent)
+            .text("Agent presets")
+            .secondary_text("Edit agent presets in ~/.config/sizzle/db.json\nor use the Tauri UI for now.")
+            .build();
+        dialog.connect_response(|d, _| d.close());
+        dialog.present();
+    });
+
+    let vbox = GtkBox::new(Orientation::Vertical, 8);
+    vbox.set_margin_start(16);
+    vbox.set_margin_end(16);
+    vbox.set_margin_top(16);
+    vbox.set_margin_bottom(16);
+    vbox.append(&add_folder_btn);
+    vbox.append(&agent_presets_btn);
+
+    win.set_child(Some(&vbox));
+    win.present();
+}
+
 // ── Memory usage ──────────────────────────────────────────────────────────
 
-fn read_mem_mb() -> Option<u64> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    for line in status.lines() {
+fn process_rss_kb(pid: u32) -> Option<u64> {
+    let content = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    for line in content.lines() {
         if line.starts_with("VmRSS:") {
             let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
-            return Some(kb / 1024);
+            return Some(kb);
         }
     }
     None
+}
+
+fn process_cmdline(pid: u32) -> String {
+    let raw = match std::fs::read(format!("/proc/{pid}/cmdline")) {
+        Ok(r) => r,
+        Err(_) => return String::new(),
+    };
+    raw.split(|&b| b == 0)
+        .filter_map(|s| std::str::from_utf8(s).ok())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Walk /proc to find all descendants of the current process and sum their RSS,
+/// categorized as "app" (main process + non-agent children) and "LLM agents"
+/// (claude, codex processes spawned by terminals).
+fn read_mem_breakdown() -> Option<(u64, u64)> {
+    let current_pid = std::process::id();
+    let mut all_pids = Vec::new();
+    let entries = std::fs::read_dir("/proc").ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if let Some(pid_str) = name.to_str() {
+            if let Ok(pid) = pid_str.parse::<u32>() {
+                all_pids.push(pid);
+            }
+        }
+    }
+
+    // Build parent→children map
+    let mut children: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+    for &pid in &all_pids {
+        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else { continue };
+        for line in status.lines() {
+            if line.starts_with("PPid:") {
+                if let Some(ppid_str) = line.split_whitespace().nth(1) {
+                    if let Ok(ppid) = ppid_str.parse::<u32>() {
+                        children.entry(ppid).or_default().push(pid);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Collect all descendants of the current process
+    let mut descendants = Vec::new();
+    let mut stack = vec![current_pid];
+    while let Some(pid) = stack.pop() {
+        if let Some(kids) = children.get(&pid) {
+            for &child in kids {
+                descendants.push(child);
+                stack.push(child);
+            }
+        }
+    }
+
+    let mut app_kb = match process_rss_kb(current_pid) {
+        Some(kb) => kb,
+        None => return None,
+    };
+    let mut agent_kb = 0u64;
+
+    for &pid in &descendants {
+        let Some(rss) = process_rss_kb(pid) else { continue };
+        let cmdline = process_cmdline(pid);
+        let lower = cmdline.to_lowercase();
+        if lower.contains("claude") || lower.contains("codex") {
+            agent_kb += rss;
+        } else {
+            app_kb += rss;
+        }
+    }
+
+    Some((app_kb, agent_kb))
 }

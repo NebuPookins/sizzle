@@ -96,8 +96,8 @@ pub struct TerminalWidget {
     rows: Arc<AtomicUsize>,
     on_exit: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
     adjustment: gtk4::Adjustment,
+    last_activity: Arc<Mutex<Option<Instant>>>,
     focused: Arc<AtomicBool>,
-    idle_flag: DirtyFlag,
 }
 
 impl TerminalWidget {
@@ -135,9 +135,14 @@ impl TerminalWidget {
         let ev_loop = EventLoop::new(term.clone(), dirty_flag.clone(), pty, false, false)
             .expect("EventLoop failed");
         let sender = ev_loop.channel();
+        let last_activity = Arc::new(Mutex::new(None::<Instant>));
+        let last_activity_clone = last_activity.clone();
         dirty_flag.set_write_fn({
             let sender = sender.clone();
-            move |bytes| { let _ = sender.send(Msg::Input(bytes.into())); }
+            move |bytes| {
+                *last_activity_clone.lock().unwrap() = Some(Instant::now());
+                let _ = sender.send(Msg::Input(bytes.into()));
+            }
         });
         ev_loop.spawn();
 
@@ -161,8 +166,7 @@ impl TerminalWidget {
         let cols_a = Arc::new(AtomicUsize::new(cols));
         let rows_a = Arc::new(AtomicUsize::new(rows));
 
-        let idle_store = dirty_flag.clone();
-        let widget = Self { container, da, term, sender, dirty, cols: cols_a, rows: rows_a, on_exit: dirty_flag.on_exit.clone(), adjustment, focused: Arc::new(AtomicBool::new(false)), idle_flag: idle_store };
+        let widget = Self { container, da, term, sender, dirty, cols: cols_a, rows: rows_a, on_exit: dirty_flag.on_exit.clone(), adjustment, last_activity, focused: Arc::new(AtomicBool::new(false)) };
         widget.setup_draw();
         widget.setup_keyboard();
         widget.setup_context_menu();
@@ -510,15 +514,15 @@ impl TerminalWidget {
         *self.on_exit.lock().unwrap() = Some(Box::new(cb));
     }
 
+    /// Returns a shared reference to the timestamp of the last PTY output.
+    pub fn last_activity(&self) -> Arc<Mutex<Option<Instant>>> {
+        self.last_activity.clone()
+    }
+
     /// Mark this terminal as focused or unfocused, causing a visual dim when unfocused.
     pub fn set_focused(&self, focused: bool) {
         self.focused.store(focused, Ordering::Release);
         self.da.queue_draw();
-    }
-
-    /// Returns true if no PtyWrite received in the last 5 seconds (heuristic for idle agent).
-    pub fn is_idle(&self) -> bool {
-        self.idle_flag.is_idle()
     }
 
     /// Returns whether this terminal currently has focus.
