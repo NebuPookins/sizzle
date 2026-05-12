@@ -13,7 +13,7 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
-    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
+    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, Picture,
     ScrolledWindow, Stack, StackTransitionType, StyleContext, TextView, WrapMode,
 };
 
@@ -866,6 +866,19 @@ fn build_explorer_tab(project_root: &str) -> Paned {
     md_container.append(&md_view.scroll);
     content_stack.add_named(&md_container, Some("markdown"));
 
+    let image_view = gtk4::Picture::new();
+    image_view.set_hexpand(true);
+    image_view.set_vexpand(true);
+    image_view.set_keep_aspect_ratio(true);
+    let image_scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Automatic)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .hexpand(true)
+        .vexpand(true)
+        .child(&image_view)
+        .build();
+    content_stack.add_named(&image_scroll, Some("image"));
+
     // Wire up explorer markdown edit/save/cancel
     {
         let mv = md_view.clone();
@@ -946,13 +959,14 @@ fn build_explorer_tab(project_root: &str) -> Paned {
         let eb = md_edit_btn.clone();
         let sb = md_save_btn.clone();
         let cb = md_cancel_btn.clone();
+        let iv = image_view.clone();
 
         file_list.connect_row_activated(move |_, row| {
             let path = row.widget_name().to_string();
             if std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false) {
                 explorer_load_dir(&fl, &pl, &bb, &pr, path, &cd);
             } else {
-                explorer_show_file(&cs, &tv, &mv, &ml, &pr, &path);
+                explorer_show_file(&cs, &tv, &mv, &ml, &iv, &pr, &path);
                 // Track the current file for markdown editing
                 if cs.visible_child_name().as_deref() == Some("markdown") {
                     *md_path.borrow_mut() = Some(path);
@@ -1028,6 +1042,7 @@ fn explorer_show_file(
     text_view: &TextView,
     md_view: &markdown::MarkdownView,
     msg_lbl: &Label,
+    image_view: &Picture,
     project_root: &str,
     file_path: &str,
 ) {
@@ -1049,6 +1064,18 @@ fn explorer_show_file(
             } else {
                 text_view.buffer().set_text(&content);
                 content_stack.set_visible_child_name("text");
+            }
+        }
+        "media" => {
+            if preview.mime_type.as_deref().map_or(false, |m| m.starts_with("image/")) {
+                image_view.set_filename(Some(file_path));
+                content_stack.set_visible_child_name("image");
+            } else if let Some(mime) = preview.mime_type {
+                msg_lbl.set_text(&format!("Preview not available for {}", mime));
+                content_stack.set_visible_child_name("message");
+            } else {
+                msg_lbl.set_text("Cannot preview this file type");
+                content_stack.set_visible_child_name("message");
             }
         }
         "tooLarge" => {
