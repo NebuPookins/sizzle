@@ -55,11 +55,6 @@ impl DirtyFlag {
         }
     }
 
-    /// Returns true if no PtyWrite has been received in the last 5 seconds.
-    pub fn is_idle(&self) -> bool {
-        self.last_write_time.lock().unwrap().elapsed() > Duration::from_secs(5)
-    }
-
     pub fn set_write_fn<F: Fn(Vec<u8>) + Send + 'static>(&self, f: F) {
         *self.write_fn.lock().unwrap() = Some(Box::new(f));
     }

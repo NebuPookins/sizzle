@@ -14,7 +14,7 @@ use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
     HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, Picture,
-    ScrolledWindow, Stack, StackTransitionType, StyleContext, TextView, WrapMode,
+    ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
 };
 
 use sizzle_core::{AgentPreset, MetadataStore, ScanSettings, ScannedProject, scan_projects};
@@ -370,7 +370,7 @@ fn build_ui(app: &Application) {
          .git-pane label { color: #cdd6f4; }",
     );
     if let Some(display) = gdk::Display::default() {
-        StyleContext::add_provider_for_display(&display, &css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        gtk4::style_context_add_provider_for_display(&display, &css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
 
     window.present();
@@ -893,7 +893,6 @@ fn build_explorer_tab(project_root: &str) -> Paned {
     let image_view = gtk4::Picture::new();
     image_view.set_hexpand(true);
     image_view.set_vexpand(true);
-    image_view.set_keep_aspect_ratio(true);
     let image_scroll = ScrolledWindow::builder()
         .hscrollbar_policy(gtk4::PolicyType::Automatic)
         .vscrollbar_policy(gtk4::PolicyType::Automatic)
