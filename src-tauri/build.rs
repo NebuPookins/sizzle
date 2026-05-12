@@ -236,8 +236,11 @@ fn snake_to_camel(s: &str) -> String {
 fn generate_icons() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")?;
     let icons_dir = std::path::Path::new(&manifest_dir).join("icons");
-
-    let svg_path = icons_dir.join("app-icon.svg");
+    let svg_path = std::path::Path::new(&manifest_dir)
+        .join("..")
+        .join("assets")
+        .join("icons")
+        .join("app-icon.svg");
     if !svg_path.exists() {
         return Ok(()); // no source SVG to generate from
     }
@@ -302,11 +305,12 @@ fn generate_icons() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     };
 
-    run(&["rsvg-convert", "-w", "32", "-h", "32", "app-icon.svg", "-o", "32x32.png"])?;
-    run(&["rsvg-convert", "-w", "128", "-h", "128", "app-icon.svg", "-o", "128x128.png"])?;
-    run(&["rsvg-convert", "-w", "256", "-h", "256", "app-icon.svg", "-o", "128x128@2x.png"])?;
+    let svg_str = svg_path.to_string_lossy().to_string();
+    run(&["rsvg-convert", "-w", "32", "-h", "32", &svg_str, "-o", "32x32.png"])?;
+    run(&["rsvg-convert", "-w", "128", "-h", "128", &svg_str, "-o", "128x128.png"])?;
+    run(&["rsvg-convert", "-w", "256", "-h", "256", &svg_str, "-o", "128x128@2x.png"])?;
     run(&[
-        "magick", "convert", "-background", "none", "app-icon.svg",
+        "magick", "convert", "-background", "none", &svg_str,
         "-define", "icon:auto-resize=256,128,96,64,48,32", "icon.ico",
     ])?;
     // ICNS: generate from the 128px PNG so we don't depend on SVG→ICNS support
