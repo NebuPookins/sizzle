@@ -121,7 +121,7 @@ impl TerminalWidget {
         };
 
         let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
+            Config { scrolling_history: 1000, ..Config::default() },
             &TermSize { cols, rows },
             dirty_flag.clone(),
         )));

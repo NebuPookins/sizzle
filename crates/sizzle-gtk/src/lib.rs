@@ -60,6 +60,7 @@ struct AppState {
     pending_exits: Arc<Mutex<Vec<String>>>,
     focus_memory: HashMap<String, String>,
     main_window: gtk4::Window,
+    status_dots: Rc<RefCell<Vec<DrawingArea>>>,
 }
 
 type State = Rc<RefCell<AppState>>;
@@ -247,6 +248,7 @@ fn build_ui(app: &Application) {
         pending_exits: Arc::new(Mutex::new(Vec::new())),
         focus_memory: HashMap::new(),
         main_window: window.clone().upcast(),
+        status_dots: Rc::new(RefCell::new(Vec::new())),
     }));
 
     populate_list(&state);
@@ -348,12 +350,16 @@ fn build_ui(app: &Application) {
             }
         }
 
-        // Refresh status dots (yellow/green) while terminals are active
+        // Refresh status dots (yellow/green) while terminals are active — queue
+        // a redraw on each dot DrawingArea in-place rather than recreating all
+        // list rows (which was the source of a severe memory leak).
         {
             let s = state_for_exits.borrow();
             if !s.active_terminals.is_empty() {
-                drop(s);
-                populate_list(&state_for_exits);
+                let dots = s.status_dots.borrow();
+                for dot in dots.iter() {
+                    dot.queue_draw();
+                }
             }
         }
 
@@ -471,6 +477,10 @@ fn populate_list(state: &State) {
     use std::cmp::Reverse;
 
     let st = state.borrow();
+    // Clone the Rc so we can mutate the inner vec without needing &mut AppState.
+    let dots_rc = st.status_dots.clone();
+    dots_rc.borrow_mut().clear();
+
     while let Some(row) = st.list_box.row_at_index(0) {
         // Break the ref cycle created by context_popover.set_parent(&row).
         // GTK4's set_parent makes the child hold a strong ref to its parent,
@@ -480,7 +490,7 @@ fn populate_list(state: &State) {
         // not appear in the first_child chain in all GTK4 versions.
         if let Some(first) = row.first_child() {
             let mut c = Some(first.clone());
-            let mut last = row.last_child();
+            let last = row.last_child();
             while let Some(child) = c {
                 c = child.next_sibling();
                 if child.is::<Popover>() {
@@ -583,28 +593,29 @@ fn populate_list(state: &State) {
 
         let row_box = GtkBox::new(Orientation::Horizontal, 0);
 
-        // Status dot: yellow if recent terminal activity, green if idle, hidden if inactive
+        // Status dot: yellow if recent terminal activity, green if idle, hidden if inactive.
+        // The draw function captures live Arc refs so queue_draw() gives a fresh color
+        // without recreating the entire list.
         if st.active_terminals.contains_key(&project.path) {
-            let has_recent_activity = st
+            let activity_refs: Vec<Arc<Mutex<Option<Instant>>>> = st
                 .last_terminal_activity
                 .get(&project.path)
-                .map(|activities| {
-                    activities.iter().any(|a| {
-                        a.lock()
-                            .unwrap()
-                            .map(|t| t.elapsed() < Duration::from_secs(5))
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false);
+                .cloned()
+                .unwrap_or_default();
 
             let dot = DrawingArea::new();
             dot.set_size_request(8, 8);
             dot.set_valign(gtk4::Align::Center);
             dot.set_margin_start(8);
             dot.set_draw_func(move |_, cr, w, h| {
+                let has_recent = activity_refs.iter().any(|a| {
+                    a.lock()
+                        .unwrap()
+                        .map(|t| t.elapsed() < Duration::from_secs(5))
+                        .unwrap_or(false)
+                });
                 let r = (w.min(h) as f64 / 2.0).min(4.0);
-                if has_recent_activity {
+                if has_recent {
                     cr.set_source_rgb(0.95, 0.76, 0.0); // yellow/gold
                 } else {
                     cr.set_source_rgb(0.31, 0.98, 0.48); // #50fa7b green
@@ -618,6 +629,7 @@ fn populate_list(state: &State) {
                 );
                 cr.fill().ok();
             });
+            dots_rc.borrow_mut().push(dot.clone());
             row_box.append(&dot);
         }
 
