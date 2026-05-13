@@ -102,6 +102,7 @@ pub struct TerminalWidget {
     adjustment: gtk4::Adjustment,
     last_activity: Arc<Mutex<Option<Instant>>>,
     focused: Arc<AtomicBool>,
+    timer_stopped: Arc<AtomicBool>,
 }
 
 impl TerminalWidget {
@@ -182,6 +183,7 @@ impl TerminalWidget {
             adjustment,
             last_activity,
             focused: Arc::new(AtomicBool::new(false)),
+            timer_stopped: Arc::new(AtomicBool::new(false)),
         };
         widget.setup_draw();
         widget.setup_keyboard();
@@ -352,6 +354,8 @@ impl TerminalWidget {
             let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
             popover.set_pointing_to(Some(&rect));
             popover.set_parent(&container);
+            let p = popover.clone();
+            popover.connect_closed(move |_| { p.unparent(); });
             popover.popup();
         });
         self.container.add_controller(gesture);
@@ -516,7 +520,11 @@ impl TerminalWidget {
         let term = self.term.clone();
         let adj = self.adjustment.clone();
         let rows = self.rows.clone();
+        let stopped = self.timer_stopped.clone();
         glib::timeout_add_local(Duration::from_millis(16), move || {
+            if stopped.load(Ordering::Acquire) {
+                return glib::ControlFlow::Break;
+            }
             // Read terminal state under lock, then drop before touching GTK
             // (which can fire value-changed → lock the same term = deadlock)
             let (doff, history) = {
@@ -579,6 +587,7 @@ impl TerminalWidget {
     }
 
     pub fn shutdown(&self) {
+        self.timer_stopped.store(true, Ordering::Release);
         let _ = self.sender.send(Msg::Shutdown);
     }
 

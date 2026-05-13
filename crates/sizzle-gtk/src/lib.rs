@@ -472,6 +472,34 @@ fn populate_list(state: &State) {
 
     let st = state.borrow();
     while let Some(row) = st.list_box.row_at_index(0) {
+        // Break the ref cycle created by context_popover.set_parent(&row).
+        // GTK4's set_parent makes the child hold a strong ref to its parent,
+        // so we must explicitly unparent popovers before dropping the row,
+        // otherwise the row and popover keep each other alive indefinitely.
+        // We iterate through first_child/last_child to catch popovers that may
+        // not appear in the first_child chain in all GTK4 versions.
+        if let Some(first) = row.first_child() {
+            let mut c = Some(first.clone());
+            let mut last = row.last_child();
+            while let Some(child) = c {
+                c = child.next_sibling();
+                if child.is::<Popover>() {
+                    child.unparent();
+                }
+            }
+            if let Some(l) = last {
+                if l != row.last_child().as_ref() {
+                    // Re-check from the end if the list was modified by unparent
+                    let mut c = Some(l.clone());
+                    while let Some(child) = c {
+                        c = child.prev_sibling();
+                        if child.is::<Popover>() {
+                            child.unparent();
+                        }
+                    }
+                }
+            }
+        }
         st.list_box.remove(&row);
     }
 
