@@ -1,7 +1,7 @@
 pub mod markdown;
 pub mod terminal;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -13,11 +13,11 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
-    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, Picture,
-    ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
+    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, Picture, ScrolledWindow,
+    Stack, StackTransitionType, TextView, WrapMode,
 };
 
-use sizzle_core::{AgentPreset, MetadataStore, ScanSettings, ScannedProject, scan_projects};
+use sizzle_core::{scan_projects, AgentPreset, MetadataStore, ScanSettings, ScannedProject};
 
 // ── App state ─────────────────────────────────────────────────────────────
 
@@ -25,6 +25,26 @@ struct ProjectWidgets {
     git_view: TextView,
     agent_terminal: Option<terminal::TerminalWidget>,
     shell_terminal: Option<terminal::TerminalWidget>,
+}
+
+#[derive(Clone)]
+struct ShellTab {
+    id: usize,
+    label: String,
+    terminal: terminal::TerminalWidget,
+}
+
+#[derive(Clone)]
+struct ShellTabContext {
+    path: String,
+    agent: terminal::TerminalWidget,
+    shell_stack: Stack,
+    tab_box: GtkBox,
+    state: State,
+    pending_exits: Arc<Mutex<Vec<String>>>,
+    shells: Rc<RefCell<Vec<ShellTab>>>,
+    active_shell_id: Rc<Cell<usize>>,
+    next_shell_id: Rc<Cell<usize>>,
 }
 
 struct AppState {
@@ -105,7 +125,10 @@ fn build_ui(app: &Application) {
 
     let search = Entry::builder()
         .placeholder_text("Search projects…")
-        .margin_start(6).margin_end(6).margin_top(6).margin_bottom(4)
+        .margin_start(6)
+        .margin_end(6)
+        .margin_top(6)
+        .margin_bottom(4)
         .build();
 
     let list_box = ListBox::new();
@@ -246,19 +269,26 @@ fn build_ui(app: &Application) {
                 let visible = if query.is_empty() {
                     true
                 } else {
-                    st.projects.iter().find(|p| p.path == path).map_or(false, |p| {
-                        let tag = p.detected_tags.first().map(|t| t.name.as_str()).unwrap_or("");
-                        let label = if tag.is_empty() {
-                            p.name.clone()
-                        } else {
-                            format!("{} [{}]", p.name, tag)
-                        };
-                        if case_sensitive {
-                            label.contains(query.as_str())
-                        } else {
-                            label.to_lowercase().contains(&query_lower as &str)
-                        }
-                    })
+                    st.projects
+                        .iter()
+                        .find(|p| p.path == path)
+                        .map_or(false, |p| {
+                            let tag = p
+                                .detected_tags
+                                .first()
+                                .map(|t| t.name.as_str())
+                                .unwrap_or("");
+                            let label = if tag.is_empty() {
+                                p.name.clone()
+                            } else {
+                                format!("{} [{}]", p.name, tag)
+                            };
+                            if case_sensitive {
+                                label.contains(query.as_str())
+                            } else {
+                                label.to_lowercase().contains(&query_lower as &str)
+                            }
+                        })
                 };
                 row.set_visible(visible);
                 i += 1;
@@ -278,7 +308,9 @@ fn build_ui(app: &Application) {
         let state = state.clone();
         let window_weak = window.downgrade();
         settings_btn.connect_clicked(move |_| {
-            let Some(win) = window_weak.upgrade() else { return };
+            let Some(win) = window_weak.upgrade() else {
+                return;
+            };
             show_settings_window(&win, &state);
         });
     }
@@ -287,7 +319,9 @@ fn build_ui(app: &Application) {
         let state = state.clone();
         let window_weak = window.downgrade();
         scan_btn.connect_clicked(move |_| {
-            let Some(win) = window_weak.upgrade() else { return };
+            let Some(win) = window_weak.upgrade() else {
+                return;
+            };
             pick_folder_and_scan(&state, &win);
         });
     }
@@ -296,7 +330,9 @@ fn build_ui(app: &Application) {
         let state = state.clone();
         let window_weak = window.downgrade();
         glib::idle_add_local_once(move || {
-            let Some(win) = window_weak.upgrade() else { return };
+            let Some(win) = window_weak.upgrade() else {
+                return;
+            };
             pick_folder_and_scan(&state, &win);
         });
     }
@@ -312,10 +348,11 @@ fn build_ui(app: &Application) {
                 let mut s = state_for_exits.borrow_mut();
                 for path in exits {
                     if let Some(n) = s.active_terminals.get_mut(&path) {
-                        *n -= 1;
-                        if *n == 0 {
+                        if *n <= 1 {
                             s.active_terminals.remove(&path);
                             s.last_terminal_activity.remove(&path);
+                        } else {
+                            *n -= 1;
                         }
                     }
                 }
@@ -367,10 +404,37 @@ fn build_ui(app: &Application) {
     css_provider.load_from_data(
         ".git-pane { background: #1e1e2e; }
          .git-pane textview text { background: #1e1e2e; color: #cdd6f4; }
-         .git-pane label { color: #cdd6f4; }",
+         .git-pane label { color: #cdd6f4; }
+         .terminal-middle-bar {
+             background: #20242b;
+             border-top: 1px solid #3a404b;
+             border-bottom: 1px solid #101216;
+             padding: 2px 6px;
+             min-height: 30px;
+         }
+         .terminal-grip { color: #8b949e; padding: 0 6px; }
+         button.shell-tab {
+             border-radius: 4px;
+             padding: 2px 8px;
+             background: transparent;
+             color: #c9d1d9;
+         }
+         button.shell-tab-active {
+             background: #3a404b;
+             color: #ffffff;
+         }
+         button.shell-tab-close {
+             min-width: 18px;
+             min-height: 18px;
+             padding: 0;
+         }",
     );
     if let Some(display) = gdk::Display::default() {
-        gtk4::style_context_add_provider_for_display(&display, &css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &css_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
     }
 
     window.present();
@@ -381,8 +445,8 @@ fn build_ui(app: &Application) {
 fn marker_sort_key(marker: Option<&str>) -> u8 {
     match marker {
         Some("favorite") => 0,
-        Some("ignored")  => 2,
-        _                => 1,
+        Some("ignored") => 2,
+        _ => 1,
     }
 }
 
@@ -393,15 +457,15 @@ fn format_relative_time(last_ms: i64) -> String {
         .unwrap_or(0);
     let secs = ((now_ms - last_ms) / 1000).max(0);
     match secs {
-        s if s < 60        => "just now".to_string(),
-        s if s < 120       => "1 minute ago".to_string(),
-        s if s < 3_600     => format!("{} minutes ago", s / 60),
-        s if s < 7_200     => "1 hour ago".to_string(),
-        s if s < 86_400    => format!("{} hours ago", s / 3_600),
-        s if s < 172_800   => "yesterday".to_string(),
+        s if s < 60 => "just now".to_string(),
+        s if s < 120 => "1 minute ago".to_string(),
+        s if s < 3_600 => format!("{} minutes ago", s / 60),
+        s if s < 7_200 => "1 hour ago".to_string(),
+        s if s < 86_400 => format!("{} hours ago", s / 3_600),
+        s if s < 172_800 => "yesterday".to_string(),
         s if s < 2_592_000 => format!("{} days ago", s / 86_400),
         s if s < 5_184_000 => "1 month ago".to_string(),
-        s                  => format!("{} months ago", s / 2_592_000),
+        s => format!("{} months ago", s / 2_592_000),
     }
 }
 
@@ -430,9 +494,13 @@ fn populate_list(state: &State) {
             .get(&project.path)
             .and_then(|m| m.marker.as_deref())
             .unwrap_or("");
-        let is_ignored  = marker == "ignored";
+        let is_ignored = marker == "ignored";
 
-        let tag = project.detected_tags.first().map(|t| t.name.as_str()).unwrap_or("");
+        let tag = project
+            .detected_tags
+            .first()
+            .map(|t| t.name.as_str())
+            .unwrap_or("");
         let name_text = if tag.is_empty() {
             project.name.clone()
         } else {
@@ -448,13 +516,17 @@ fn populate_list(state: &State) {
         let name_lbl = Label::builder()
             .label(&name_text)
             .halign(gtk4::Align::Start)
-            .margin_start(8).margin_top(4).margin_bottom(0)
+            .margin_start(8)
+            .margin_top(4)
+            .margin_bottom(0)
             .build();
 
         let time_lbl = Label::builder()
             .label(&last_active)
             .halign(gtk4::Align::Start)
-            .margin_start(8).margin_top(0).margin_bottom(4)
+            .margin_start(8)
+            .margin_top(0)
+            .margin_bottom(4)
             .build();
         time_lbl.add_css_class("caption");
 
@@ -483,10 +555,15 @@ fn populate_list(state: &State) {
 
         // Status dot: yellow if recent terminal activity, green if idle, hidden if inactive
         if st.active_terminals.contains_key(&project.path) {
-            let has_recent_activity = st.last_terminal_activity.get(&project.path)
+            let has_recent_activity = st
+                .last_terminal_activity
+                .get(&project.path)
                 .map(|activities| {
                     activities.iter().any(|a| {
-                        a.lock().unwrap().map(|t| t.elapsed() < Duration::from_secs(5)).unwrap_or(false)
+                        a.lock()
+                            .unwrap()
+                            .map(|t| t.elapsed() < Duration::from_secs(5))
+                            .unwrap_or(false)
                     })
                 })
                 .unwrap_or(false);
@@ -502,7 +579,13 @@ fn populate_list(state: &State) {
                 } else {
                     cr.set_source_rgb(0.31, 0.98, 0.48); // #50fa7b green
                 }
-                cr.arc(w as f64 / 2.0, h as f64 / 2.0, r - 0.5, 0.0, 2.0 * std::f64::consts::PI);
+                cr.arc(
+                    w as f64 / 2.0,
+                    h as f64 / 2.0,
+                    r - 0.5,
+                    0.0,
+                    2.0 * std::f64::consts::PI,
+                );
                 cr.fill().ok();
             });
             row_box.append(&dot);
@@ -546,7 +629,9 @@ fn select_project(state: &State, path: &str) {
         let st = state.borrow();
         st.projects.iter().any(|p| p.path == path)
     };
-    if !found { return; }
+    if !found {
+        return;
+    }
 
     {
         let mut st = state.borrow_mut();
@@ -657,8 +742,8 @@ fn select_project(state: &State, path: &str) {
             btn_box.set_halign(gtk4::Align::End);
 
             let claude_btn = Button::with_label("Launch Claude");
-            let codex_btn  = Button::with_label("Launch Codex");
-            let shell_btn  = Button::with_label("Shell");
+            let codex_btn = Button::with_label("Launch Codex");
+            let shell_btn = Button::with_label("Shell");
             btn_box.append(&claude_btn);
             btn_box.append(&codex_btn);
             btn_box.append(&shell_btn);
@@ -744,11 +829,14 @@ fn select_project(state: &State, path: &str) {
             }
 
             st.project_stack.add_named(&project_box, Some(&path));
-            st.project_widgets.insert(path.clone(), ProjectWidgets {
-                git_view,
-                agent_terminal: None,
-                shell_terminal: None,
-            });
+            st.project_widgets.insert(
+                path.clone(),
+                ProjectWidgets {
+                    git_view,
+                    agent_terminal: None,
+                    shell_terminal: None,
+                },
+            );
         }
     }
 
@@ -768,12 +856,15 @@ fn select_project(state: &State, path: &str) {
     // Important: clone the terminal out first, then call focus() outside the borrow,
     // because focus() triggers the focus-in callback which also borrows state.
     if let Some(key) = focus_key {
-        let terminal = state.borrow().project_widgets.get(&path).and_then(|pw| {
-            match key.as_str() {
-                "shell" => pw.shell_terminal.clone(),
-                _ => pw.agent_terminal.clone(),
-            }
-        });
+        let terminal =
+            state
+                .borrow()
+                .project_widgets
+                .get(&path)
+                .and_then(|pw| match key.as_str() {
+                    "shell" => pw.shell_terminal.clone(),
+                    _ => pw.agent_terminal.clone(),
+                });
         if let Some(t) = terminal {
             t.focus();
         }
@@ -963,8 +1054,12 @@ fn build_explorer_tab(project_root: &str) -> Paned {
     let project_root = project_root.to_string();
 
     explorer_load_dir(
-        &file_list, &path_lbl, &back_btn,
-        &project_root, project_root.clone(), &current_dir,
+        &file_list,
+        &path_lbl,
+        &back_btn,
+        &project_root,
+        project_root.clone(),
+        &current_dir,
     );
 
     // ── Row activated (connected once) ────────────────────────────────────
@@ -986,7 +1081,10 @@ fn build_explorer_tab(project_root: &str) -> Paned {
 
         file_list.connect_row_activated(move |_, row| {
             let path = row.widget_name().to_string();
-            if std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false) {
+            if std::fs::metadata(&path)
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
+            {
                 explorer_load_dir(&fl, &pl, &bb, &pr, path, &cd);
             } else {
                 explorer_show_file(&cs, &tv, &mv, &ml, &iv, &pr, &path);
@@ -1035,7 +1133,10 @@ fn explorer_load_dir(
 ) {
     *current_dir.borrow_mut() = dir.clone();
 
-    let rel = dir.strip_prefix(project_root).unwrap_or(&dir).trim_start_matches('/');
+    let rel = dir
+        .strip_prefix(project_root)
+        .unwrap_or(&dir)
+        .trim_start_matches('/');
     path_lbl.set_text(if rel.is_empty() { "/" } else { rel });
 
     back_btn.set_sensitive(&dir != project_root);
@@ -1069,10 +1170,7 @@ fn explorer_show_file(
     project_root: &str,
     file_path: &str,
 ) {
-    let preview = sizzle_core::files::preview_file(
-        project_root.to_string(),
-        file_path.to_string(),
-    );
+    let preview = sizzle_core::files::preview_file(project_root.to_string(), file_path.to_string());
     match preview.kind.as_str() {
         "text" => {
             let content = preview.content.unwrap_or_default();
@@ -1090,7 +1188,11 @@ fn explorer_show_file(
             }
         }
         "media" => {
-            if preview.mime_type.as_deref().map_or(false, |m| m.starts_with("image/")) {
+            if preview
+                .mime_type
+                .as_deref()
+                .map_or(false, |m| m.starts_with("image/"))
+            {
                 image_view.set_filename(Some(file_path));
                 content_stack.set_visible_child_name("image");
             } else if let Some(mime) = preview.mime_type {
@@ -1107,9 +1209,9 @@ fn explorer_show_file(
             content_stack.set_visible_child_name("message");
         }
         _ => {
-            let msg = preview.message.unwrap_or_else(|| {
-                format!("Cannot preview this file ({})", preview.kind)
-            });
+            let msg = preview
+                .message
+                .unwrap_or_else(|| format!("Cannot preview this file ({})", preview.kind));
             msg_lbl.set_text(&msg);
             content_stack.set_visible_child_name("message");
         }
@@ -1118,57 +1220,24 @@ fn explorer_show_file(
 
 // ── Launch a vertically split terminal pair ────────────────────────────────
 
-fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, notebook: &Notebook, state: &State) {
-    // Record that this project now has active terminals
+fn launch_terminals(
+    path: &str,
+    tab_label: &str,
+    agent_cmd: Option<String>,
+    notebook: &Notebook,
+    state: &State,
+) {
+    let agent = terminal::TerminalWidget::new(Some(path), agent_cmd);
     let pending_exits = {
         let mut st = state.borrow_mut();
-        *st.active_terminals.entry(path.to_string()).or_insert(0) += 2;
+        *st.active_terminals.entry(path.to_string()).or_insert(0) += 1;
+        st.last_terminal_activity
+            .entry(path.to_string())
+            .or_default()
+            .push(agent.last_activity());
         st.pending_exits.clone()
     };
 
-    let agent = terminal::TerminalWidget::new(Some(path), agent_cmd);
-    let shell  = terminal::TerminalWidget::new(Some(path), None);
-
-    let p = path.to_string(); // owned for closures
-
-    // Store activity timestamps for the status dot
-    {
-        let mut st = state.borrow_mut();
-        st.last_terminal_activity.insert(path.to_string(), vec![
-            agent.last_activity(),
-            shell.last_activity(),
-        ]);
-    }
-
-    populate_list(state);
-
-    // Wire up focus tracking: when one terminal gets focus, the other dims.
-    agent.set_focused(true);
-    shell.set_focused(false);
-    {
-        let a = agent.clone();
-        let s = shell.clone();
-        let st = state.clone();
-        let p_clone = p.clone();
-        agent.connect_focus_in(move || {
-            a.set_focused(true);
-            s.set_focused(false);
-            st.borrow_mut().focus_memory.insert(p_clone.clone(), "agent".to_string());
-        });
-    }
-    {
-        let a = agent.clone();
-        let s = shell.clone();
-        let st = state.clone();
-        let p_clone = p.clone();
-        shell.connect_focus_in(move || {
-            s.set_focused(true);
-            a.set_focused(false);
-            st.borrow_mut().focus_memory.insert(p_clone.clone(), "shell".to_string());
-        });
-    }
-    // When either terminal's child process exits, push to pending_exits so the
-    // periodic timer can decrement the counter and refresh the list.
     {
         let pe = pending_exits.clone();
         let p = path.to_string();
@@ -1176,21 +1245,74 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
             pe.lock().unwrap().push(p.clone());
         });
     }
-    {
-        let pe = pending_exits;
-        let p = path.to_string();
-        shell.set_on_exit(move || {
-            pe.lock().unwrap().push(p.clone());
-        });
-    }
+
+    let shell_stack = Stack::builder()
+        .transition_type(StackTransitionType::None)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+
+    let middle_bar = GtkBox::new(Orientation::Horizontal, 4);
+    middle_bar.add_css_class("terminal-middle-bar");
+    middle_bar.set_cursor_from_name(Some("ns-resize"));
+
+    let bottom = GtkBox::new(Orientation::Vertical, 0);
+    bottom.set_hexpand(true);
+    bottom.set_vexpand(true);
+    bottom.append(&middle_bar);
+    bottom.append(&shell_stack);
 
     let vpaned = Paned::new(Orientation::Vertical);
     vpaned.set_start_child(Some(&agent.container));
-    vpaned.set_end_child(Some(&shell.container));
+    vpaned.set_end_child(Some(&bottom));
     vpaned.set_position(300);
     vpaned.set_shrink_start_child(false);
     vpaned.set_shrink_end_child(false);
     vpaned.set_vexpand(true);
+
+    {
+        let paned = vpaned.clone();
+        let drag_start = Rc::new(Cell::new(0));
+        let drag = gtk4::GestureDrag::new();
+        {
+            let drag_start = drag_start.clone();
+            let paned = paned.clone();
+            drag.connect_drag_begin(move |_, _, _| {
+                drag_start.set(paned.position());
+            });
+        }
+        {
+            let drag_start = drag_start.clone();
+            let paned = paned.clone();
+            drag.connect_drag_update(move |_, _, offset_y| {
+                let next = drag_start.get() + offset_y.round() as i32;
+                paned.set_position(next.max(80));
+            });
+        }
+        middle_bar.add_controller(drag);
+    }
+
+    let ctx = ShellTabContext {
+        path: path.to_string(),
+        agent: agent.clone(),
+        shell_stack,
+        tab_box: middle_bar,
+        state: state.clone(),
+        pending_exits: pending_exits.clone(),
+        shells: Rc::new(RefCell::new(Vec::new())),
+        active_shell_id: Rc::new(Cell::new(0)),
+        next_shell_id: Rc::new(Cell::new(1)),
+    };
+
+    {
+        let ctx = ctx.clone();
+        agent.connect_focus_in(move || {
+            activate_agent_terminal(&ctx);
+        });
+    }
+
+    let shell = add_shell_tab(&ctx, false);
+    activate_agent_terminal(&ctx);
 
     // Tab header: label + close button
     let tab_lbl = Label::new(Some(tab_label));
@@ -1207,10 +1329,12 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
     let tab_idx = notebook.append_page(&vpaned, Some(&tab_header));
     notebook.set_current_page(Some(tab_idx));
 
-    // Close button removes the terminal tab
+    // Close button removes the terminal tab and shuts down its active PTYs.
     let nb = notebook.clone();
     let page_widget = vpaned.clone();
+    let ctx_close = ctx.clone();
     close_btn.connect_clicked(move |_| {
+        shutdown_terminal_tab(&ctx_close);
         if let Some(page_num) = nb.page_num(&page_widget) {
             nb.remove_page(Some(page_num));
         }
@@ -1218,10 +1342,236 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
 
     agent.focus();
 
-    // Store terminal references for focus memory restoration when switching back
+    // Store terminal references for focus memory restoration when switching back.
     if let Some(pw) = state.borrow_mut().project_widgets.get_mut(path) {
         pw.agent_terminal = Some(agent);
         pw.shell_terminal = Some(shell);
+    }
+}
+
+fn shell_child_name(id: usize) -> String {
+    format!("shell-{id}")
+}
+
+fn add_shell_tab(ctx: &ShellTabContext, focus: bool) -> terminal::TerminalWidget {
+    let id = ctx.next_shell_id.get();
+    ctx.next_shell_id.set(id + 1);
+
+    let shell = terminal::TerminalWidget::new(Some(&ctx.path), None);
+    let child_name = shell_child_name(id);
+    ctx.shell_stack
+        .add_named(&shell.container, Some(&child_name));
+
+    {
+        let mut st = ctx.state.borrow_mut();
+        *st.active_terminals.entry(ctx.path.clone()).or_insert(0) += 1;
+        st.last_terminal_activity
+            .entry(ctx.path.clone())
+            .or_default()
+            .push(shell.last_activity());
+    }
+
+    {
+        let pe = ctx.pending_exits.clone();
+        let p = ctx.path.clone();
+        shell.set_on_exit(move || {
+            pe.lock().unwrap().push(p.clone());
+        });
+    }
+
+    ctx.shells.borrow_mut().push(ShellTab {
+        id,
+        label: format!("Shell {id}"),
+        terminal: shell.clone(),
+    });
+
+    wire_shell_terminal(ctx, &shell, id);
+    activate_shell_tab(ctx, id, focus);
+    populate_list(&ctx.state);
+    shell
+}
+
+fn wire_shell_terminal(ctx: &ShellTabContext, shell: &terminal::TerminalWidget, shell_id: usize) {
+    {
+        let ctx = ctx.clone();
+        shell.connect_focus_in(move || {
+            activate_shell_tab(&ctx, shell_id, false);
+        });
+    }
+    {
+        let ctx = ctx.clone();
+        shell.connect_key_pressed_capture(move |kv, mods| {
+            let is_ctrl_w = kv == gdk::Key::w && mods.contains(gdk::ModifierType::CONTROL_MASK);
+            let can_close = ctx.shells.borrow().len() > 1;
+            if is_ctrl_w && can_close {
+                close_shell_tab(&ctx, shell_id, true);
+                true
+            } else {
+                false
+            }
+        });
+    }
+}
+
+fn activate_agent_terminal(ctx: &ShellTabContext) {
+    ctx.agent.set_focused(true);
+    for shell in ctx.shells.borrow().iter() {
+        shell.terminal.set_focused(false);
+    }
+    ctx.state
+        .borrow_mut()
+        .focus_memory
+        .insert(ctx.path.clone(), "agent".to_string());
+}
+
+fn activate_shell_tab(ctx: &ShellTabContext, shell_id: usize, grab_focus: bool) {
+    let changed = ctx.active_shell_id.get() != shell_id;
+    ctx.active_shell_id.set(shell_id);
+    ctx.shell_stack
+        .set_visible_child_name(&shell_child_name(shell_id));
+
+    let mut active_terminal = None;
+    for shell in ctx.shells.borrow().iter() {
+        let is_active = shell.id == shell_id;
+        shell.terminal.set_focused(is_active);
+        if is_active {
+            active_terminal = Some(shell.terminal.clone());
+        }
+    }
+    ctx.agent.set_focused(false);
+
+    {
+        let mut st = ctx.state.borrow_mut();
+        st.focus_memory
+            .insert(ctx.path.clone(), "shell".to_string());
+        if let Some(pw) = st.project_widgets.get_mut(&ctx.path) {
+            pw.shell_terminal = active_terminal.clone();
+        }
+    }
+
+    if changed {
+        refresh_shell_tab_bar(ctx);
+    }
+    if grab_focus {
+        if let Some(terminal) = active_terminal {
+            terminal.focus();
+        }
+    }
+}
+
+fn close_shell_tab(ctx: &ShellTabContext, shell_id: usize, refocus: bool) -> bool {
+    let (removed, was_active, next_active_id) = {
+        let mut shells = ctx.shells.borrow_mut();
+        if shells.len() <= 1 {
+            return false;
+        }
+        let Some(index) = shells.iter().position(|shell| shell.id == shell_id) else {
+            return false;
+        };
+        let was_active = ctx.active_shell_id.get() == shell_id;
+        let removed = shells.remove(index);
+        let next_active_id = if was_active {
+            shells
+                .get(index)
+                .or_else(|| shells.last())
+                .map(|shell| shell.id)
+        } else {
+            Some(ctx.active_shell_id.get())
+        };
+        (removed, was_active, next_active_id)
+    };
+
+    ctx.shell_stack.remove(&removed.terminal.container);
+    removed.terminal.shutdown();
+    ctx.pending_exits.lock().unwrap().push(ctx.path.clone());
+
+    if was_active {
+        if let Some(next_id) = next_active_id {
+            activate_shell_tab(ctx, next_id, refocus);
+        }
+    } else {
+        refresh_shell_tab_bar(ctx);
+    }
+    true
+}
+
+fn refresh_shell_tab_bar(ctx: &ShellTabContext) {
+    while let Some(child) = ctx.tab_box.first_child() {
+        ctx.tab_box.remove(&child);
+    }
+
+    let grip = Label::new(Some("|||"));
+    grip.add_css_class("terminal-grip");
+    grip.set_tooltip_text(Some("Drag to resize terminals"));
+    ctx.tab_box.append(&grip);
+
+    let shells = ctx.shells.borrow().clone();
+    let shell_count = shells.len();
+    let active_id = ctx.active_shell_id.get();
+
+    for shell in shells {
+        let tab_btn = Button::with_label(&shell.label);
+        tab_btn.set_has_frame(false);
+        tab_btn.set_focus_on_click(false);
+        tab_btn.add_css_class("shell-tab");
+        if shell.id == active_id {
+            tab_btn.add_css_class("shell-tab-active");
+        }
+        {
+            let ctx = ctx.clone();
+            let shell_id = shell.id;
+            tab_btn.connect_clicked(move |_| {
+                activate_shell_tab(&ctx, shell_id, true);
+            });
+        }
+        ctx.tab_box.append(&tab_btn);
+
+        if shell_count > 1 {
+            let close_btn = Button::builder()
+                .icon_name("window-close-symbolic")
+                .has_frame(false)
+                .focus_on_click(false)
+                .tooltip_text("Close shell")
+                .build();
+            close_btn.add_css_class("shell-tab-close");
+            {
+                let ctx = ctx.clone();
+                let shell_id = shell.id;
+                close_btn.connect_clicked(move |_| {
+                    close_shell_tab(&ctx, shell_id, true);
+                });
+            }
+            ctx.tab_box.append(&close_btn);
+        }
+    }
+
+    let spacer = GtkBox::new(Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    ctx.tab_box.append(&spacer);
+
+    let add_btn = Button::builder()
+        .icon_name("list-add-symbolic")
+        .has_frame(false)
+        .focus_on_click(false)
+        .tooltip_text("New shell")
+        .build();
+    {
+        let ctx = ctx.clone();
+        add_btn.connect_clicked(move |_| {
+            add_shell_tab(&ctx, true);
+        });
+    }
+    ctx.tab_box.append(&add_btn);
+}
+
+fn shutdown_terminal_tab(ctx: &ShellTabContext) {
+    ctx.agent.shutdown();
+    ctx.pending_exits.lock().unwrap().push(ctx.path.clone());
+
+    let shells = ctx.shells.borrow().clone();
+    for shell in shells {
+        shell.terminal.shutdown();
+        ctx.pending_exits.lock().unwrap().push(ctx.path.clone());
     }
 }
 
@@ -1239,10 +1589,10 @@ fn make_git_view() -> TextView {
     view.set_right_margin(8);
 
     let buf = view.buffer();
-    add_git_tag(&buf, "green",  "foreground", "#50fa7b");
-    add_git_tag(&buf, "red",    "foreground", "#ff5555");
+    add_git_tag(&buf, "green", "foreground", "#50fa7b");
+    add_git_tag(&buf, "red", "foreground", "#ff5555");
     add_git_tag(&buf, "yellow", "foreground", "#f1fa8c");
-    add_git_tag(&buf, "dim",    "foreground", "#888888");
+    add_git_tag(&buf, "dim", "foreground", "#888888");
 
     view
 }
@@ -1342,27 +1692,54 @@ fn show_settings_window(parent: &ApplicationWindow, state: &State) {
     let notebook = Notebook::new();
 
     build_settings_path_tab(
-        &notebook, parent, state,
-        "Scan Roots", "Add scan folder…",
+        &notebook,
+        parent,
+        state,
+        "Scan Roots",
+        "Add scan folder…",
         |s| &s.scan_roots,
-        |s, p| { if !s.scan_roots.contains(&p) { s.scan_roots.push(p); } },
-        |s, p| { s.scan_roots.retain(|x| x != p); },
+        |s, p| {
+            if !s.scan_roots.contains(&p) {
+                s.scan_roots.push(p);
+            }
+        },
+        |s, p| {
+            s.scan_roots.retain(|x| x != p);
+        },
     );
 
     build_settings_path_tab(
-        &notebook, parent, state,
-        "Ignore Paths", "Add ignore path…",
+        &notebook,
+        parent,
+        state,
+        "Ignore Paths",
+        "Add ignore path…",
         |s| &s.ignore_roots,
-        |s, p| { if !s.ignore_roots.contains(&p) { s.ignore_roots.push(p); } },
-        |s, p| { s.ignore_roots.retain(|x| x != p); },
+        |s, p| {
+            if !s.ignore_roots.contains(&p) {
+                s.ignore_roots.push(p);
+            }
+        },
+        |s, p| {
+            s.ignore_roots.retain(|x| x != p);
+        },
     );
 
     build_settings_path_tab(
-        &notebook, parent, state,
-        "Manual Projects", "Add manual project…",
+        &notebook,
+        parent,
+        state,
+        "Manual Projects",
+        "Add manual project…",
         |s| &s.manual_project_roots,
-        |s, p| { if !s.manual_project_roots.contains(&p) { s.manual_project_roots.push(p); } },
-        |s, p| { s.manual_project_roots.retain(|x| x != p); },
+        |s, p| {
+            if !s.manual_project_roots.contains(&p) {
+                s.manual_project_roots.push(p);
+            }
+        },
+        |s, p| {
+            s.manual_project_roots.retain(|x| x != p);
+        },
     );
 
     build_agent_presets_tab(&notebook, parent, state);
@@ -1385,10 +1762,12 @@ fn build_settings_path_tab(
     let list_box = ListBox::new();
 
     /// Populate the ListBox from the current scan settings.
-    fn populate(list_box: &ListBox, state: &State,
-                get_items: fn(&ScanSettings) -> &[String],
-                remove_item: fn(&mut ScanSettings, &str))
-    {
+    fn populate(
+        list_box: &ListBox,
+        state: &State,
+        get_items: fn(&ScanSettings) -> &[String],
+        remove_item: fn(&mut ScanSettings, &str),
+    ) {
         while let Some(row) = list_box.row_at_index(0) {
             list_box.remove(&row);
         }
@@ -1399,7 +1778,9 @@ fn build_settings_path_tab(
                 .label(&item)
                 .halign(gtk4::Align::Start)
                 .hexpand(true)
-                .margin_start(8).margin_top(4).margin_bottom(4)
+                .margin_start(8)
+                .margin_top(4)
+                .margin_bottom(4)
                 .ellipsize(gtk4::pango::EllipsizeMode::Middle)
                 .build();
             let remove_btn = Button::builder()
@@ -1452,22 +1833,26 @@ fn build_settings_path_tab(
             let dialog = gtk4::FileDialog::builder().title(&add_btn_label).build();
             let state = state.clone();
             let list_box = list_box.clone();
-            dialog.select_folder(Some(&parent_win), gtk4::gio::Cancellable::NONE, move |result| {
-                let Ok(file) = result else { return };
-                let Some(path) = file.path() else { return };
-                let path_str = path.to_string_lossy().to_string();
+            dialog.select_folder(
+                Some(&parent_win),
+                gtk4::gio::Cancellable::NONE,
+                move |result| {
+                    let Ok(file) = result else { return };
+                    let Some(path) = file.path() else { return };
+                    let path_str = path.to_string_lossy().to_string();
 
-                let mut settings = state.borrow().store.get_scan_settings();
-                add_item(&mut settings, path_str);
-                let projects = scan_projects(&settings);
-                {
-                    let mut st = state.borrow_mut();
-                    st.store.set_scan_settings(&settings);
-                    st.projects = projects;
-                }
-                populate_list(&state);
-                populate(&list_box, &state, get_items, remove_item);
-            });
+                    let mut settings = state.borrow().store.get_scan_settings();
+                    add_item(&mut settings, path_str);
+                    let projects = scan_projects(&settings);
+                    {
+                        let mut st = state.borrow_mut();
+                        st.store.set_scan_settings(&settings);
+                        st.projects = projects;
+                    }
+                    populate_list(&state);
+                    populate(&list_box, &state, get_items, remove_item);
+                },
+            );
         });
     }
 
@@ -1497,7 +1882,9 @@ fn refresh_presets_listbox(parent: &ApplicationWindow, list_box: &ListBox, state
             .label(&format!("{} → {}", preset.label, preset.command))
             .halign(gtk4::Align::Start)
             .hexpand(true)
-            .margin_start(8).margin_top(4).margin_bottom(4)
+            .margin_start(8)
+            .margin_top(4)
+            .margin_bottom(4)
             .build();
 
         let edit_btn = Button::builder()
@@ -1527,8 +1914,12 @@ fn refresh_presets_listbox(parent: &ApplicationWindow, list_box: &ListBox, state
         let edit_label = label.clone();
         let edit_command = command.clone();
         edit_btn.connect_clicked(move |_| {
-            show_agent_preset_dialog(&parent_e, &state_e, &list_box_e,
-                Some((edit_label.clone(), edit_command.clone(), i)));
+            show_agent_preset_dialog(
+                &parent_e,
+                &state_e,
+                &list_box_e,
+                Some((edit_label.clone(), edit_command.clone(), i)),
+            );
         });
 
         // Separate owned clones for remove button closure
@@ -1704,7 +2095,9 @@ fn read_mem_breakdown() -> Option<(u64, u64)> {
     // Build parent→children map
     let mut children: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
     for &pid in &all_pids {
-        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else { continue };
+        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+            continue;
+        };
         for line in status.lines() {
             if line.starts_with("PPid:") {
                 if let Some(ppid_str) = line.split_whitespace().nth(1) {
@@ -1736,7 +2129,9 @@ fn read_mem_breakdown() -> Option<(u64, u64)> {
     let mut agent_kb = 0u64;
 
     for &pid in &descendants {
-        let Some(rss) = process_rss_kb(pid) else { continue };
+        let Some(rss) = process_rss_kb(pid) else {
+            continue;
+        };
         let cmdline = process_cmdline(pid);
         let lower = cmdline.to_lowercase();
         if lower.contains("claude") || lower.contains("codex") {
