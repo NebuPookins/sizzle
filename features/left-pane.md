@@ -69,14 +69,22 @@ following options:
 
 ### List of Projects - Context Menu - Move/Rename Project
 
-"Move/Rename projects" lets the user enter in a new path. If the new path
-is under any of the "ignore roots", a warning is displayed.
+"Move/Rename projects" lets the user enter in a new path.
 
-There's a list of actions that will happen, and we go through the list in
-2 paths. First, we create an empty list of "changes" that will gradually
-populate and then display to the user for them to review. Then, we go through
-this list in "dry run" mode, where we don't actually perform the actions,
-but we record what actions we would have performed:
+As the user updates the path, we continuously perform the following checks
+(perhaps with a debounce):
+
+- If the new path is under any of the "ignore roots", a warning is displayed,
+  but the "confirmation" button is still available if the user wants to proceed
+  anyway.
+- If the new path refers to a non-empty directory (or file), an error is
+  displayed, and also the "confirmation" button is disabled.
+
+If the user confirms, then there's a list of actions that will happen, and
+we go through the list in 2 passes. First, we create an empty list of "changes"
+that will gradually populate and then display to the user for them to review.
+Then, we go through this list in "dry run" mode, where we don't actually
+perform the actions, but we record what actions we would have performed:
 
 - Move or rename the project root directory to reflect the new
   path.
