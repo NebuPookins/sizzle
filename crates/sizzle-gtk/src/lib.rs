@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use gtk4::gdk;
 use gtk4::glib;
+use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
@@ -149,14 +150,8 @@ fn build_ui(app: &Application) {
     settings_btn.set_margin_top(4);
     settings_btn.set_margin_bottom(6);
 
-    let scan_btn = Button::with_label("Add folder…");
-    scan_btn.set_margin_end(6);
-    scan_btn.set_margin_top(4);
-    scan_btn.set_margin_bottom(6);
-
     let btn_row = GtkBox::new(Orientation::Horizontal, 0);
     btn_row.append(&settings_btn);
-    btn_row.append(&scan_btn);
 
     // ── Memory breakdown widget ────────────────────────────────────────────
     let mem_total_lbl = Label::builder()
@@ -200,7 +195,7 @@ fn build_ui(app: &Application) {
     left.append(&btn_row);
     left.append(&mem_sep);
     left.append(&mem_vbox);
-    left.set_size_request(240, -1);
+    left.set_size_request(10, -1);
 
     let project_stack = Stack::builder()
         .transition_type(StackTransitionType::None)
@@ -227,7 +222,7 @@ fn build_ui(app: &Application) {
     outer_paned.set_start_child(Some(&left));
     outer_paned.set_end_child(Some(&inner_paned));
     outer_paned.set_position(260);
-    outer_paned.set_shrink_start_child(false);
+    outer_paned.set_shrink_start_child(true);
     outer_paned.set_shrink_end_child(false);
 
     let window = ApplicationWindow::builder()
@@ -317,17 +312,7 @@ fn build_ui(app: &Application) {
         });
     }
 
-    {
-        let state = state.clone();
-        let window_weak = window.downgrade();
-        scan_btn.connect_clicked(move |_| {
-            let Some(win) = window_weak.upgrade() else {
-                return;
-            };
-            pick_folder_and_scan(&state, &win);
-        });
-    }
-
+    // Auto-prompt to pick a folder if no scan roots are configured
     if store.get_scan_settings().scan_roots.is_empty() {
         let state = state.clone();
         let window_weak = window.downgrade();
@@ -532,6 +517,8 @@ fn populate_list(state: &State) {
             .margin_start(8)
             .margin_top(4)
             .margin_bottom(0)
+            .ellipsize(pango::EllipsizeMode::End)
+            .single_line_mode(true)
             .build();
 
         let time_lbl = Label::builder()
@@ -540,6 +527,8 @@ fn populate_list(state: &State) {
             .margin_start(8)
             .margin_top(0)
             .margin_bottom(4)
+            .ellipsize(pango::EllipsizeMode::End)
+            .single_line_mode(true)
             .build();
         time_lbl.add_css_class("caption");
 
@@ -1005,7 +994,7 @@ fn build_explorer_tab(project_root: &str) -> Paned {
     let left = GtkBox::new(Orientation::Vertical, 0);
     left.append(&nav_bar);
     left.append(&list_scroll);
-    left.set_size_request(240, -1);
+    left.set_size_request(10, -1);
 
     // ── Right: content viewer ──────────────────────────────────────────────
     let content_stack = Stack::new();
