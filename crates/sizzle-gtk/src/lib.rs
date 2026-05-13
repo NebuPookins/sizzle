@@ -2401,13 +2401,19 @@ struct MoveClaudeDirOp {
     new_claude: PathBuf,
 }
 
-impl MoveOp for MoveClaudeDirOp {
-    fn describe(&self) -> Vec<String> {
+impl MoveClaudeDirOp {
+    fn should_apply(&self) -> bool {
         let claude_dir = self.old_claude
             .parent()
             .and_then(|p| p.parent())
             .expect("~/.claude/projects path");
-        if !claude_dir.exists() || !self.old_claude.exists() {
+        claude_dir.exists() && self.old_claude.exists()
+    }
+}
+
+impl MoveOp for MoveClaudeDirOp {
+    fn describe(&self) -> Vec<String> {
+        if !self.should_apply() {
             return vec![];
         }
         vec![format!(
@@ -2418,11 +2424,7 @@ impl MoveOp for MoveClaudeDirOp {
     }
 
     fn execute(&self) -> Result<Vec<String>, String> {
-        let claude_dir = self.old_claude
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("~/.claude/projects path");
-        if !claude_dir.exists() || !self.old_claude.exists() {
+        if !self.should_apply() {
             return Ok(vec![]);
         }
         log::info!("MoveClaudeDirOp: {} -> {}", self.old_claude.display(), self.new_claude.display());
