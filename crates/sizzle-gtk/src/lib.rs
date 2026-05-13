@@ -2251,10 +2251,11 @@ fn mangle_claude_path(path: &str) -> String {
 // ── Trait for individual move/rename operations ─────────────────────────
 
 trait MoveOp {
-    /// Side-effect-free description (used during dry run).
-    fn describe(&self) -> String;
-    /// Perform the operation for real. Returns a human-readable result or an error.
-    fn execute(&self) -> Result<String, String>;
+    /// Side-effect-free descriptions (used during dry run). Returns an empty
+    /// vec if this operation would do nothing (preconditions not met).
+    fn describe(&self) -> Vec<String>;
+    /// Perform the operation for real. Returns human-readable results or an error.
+    fn execute(&self) -> Result<Vec<String>, String>;
 }
 
 // ── 1. Move the directory on disk ───────────────────────────────────────
@@ -2265,21 +2266,21 @@ struct MoveDirOp {
 }
 
 impl MoveOp for MoveDirOp {
-    fn describe(&self) -> String {
-        format!("Move project directory:\n     {}\n  -> {}", self.old, self.new)
+    fn describe(&self) -> Vec<String> {
+        vec![format!("Move project directory:\n     {}\n  -> {}", self.old, self.new)]
     }
 
-    fn execute(&self) -> Result<String, String> {
+    fn execute(&self) -> Result<Vec<String>, String> {
         log::info!("MoveDirOp: {} -> {}", self.old, self.new);
         std::fs::rename(&self.old, &self.new)
             .map_err(|e| {
                 log::error!("MoveDirOp failed: {} -> {}: {}", self.old, self.new, e);
                 e.to_string()
             })?;
-        Ok(format!(
+        Ok(vec![format!(
             "Moved project directory:\n  {}\n  -> {}",
             self.old, self.new
-        ))
+        )])
     }
 }
 
@@ -2293,22 +2294,22 @@ struct UpdateMetadataOp {
 }
 
 impl MoveOp for UpdateMetadataOp {
-    fn describe(&self) -> String {
-        format!(
+    fn describe(&self) -> Vec<String> {
+        vec![format!(
             "Update project metadata ({}):\n     {}\n  -> {}",
             self.db_path.display(),
             self.old,
             self.new
-        )
+        )]
     }
 
-    fn execute(&self) -> Result<String, String> {
+    fn execute(&self) -> Result<Vec<String>, String> {
         log::info!("UpdateMetadataOp: {} -> {}", self.old, self.new);
         self.state
             .borrow()
             .store
             .rename_project_metadata(&self.old, &self.new);
-        Ok("Updated project metadata.".to_string())
+        Ok(vec!["Updated project metadata.".to_string()])
     }
 }
 
@@ -2316,22 +2317,38 @@ impl MoveOp for UpdateMetadataOp {
 
 struct AddManualRootOp {
     state: State,
-    path: String,
+    old: String,
+    new: String,
+}
+
+impl AddManualRootOp {
+    fn should_apply(&self) -> bool {
+        let settings = self.state.borrow().store.get_scan_settings();
+        let was_under_scan_root = path_is_under_any_root(&self.old, &settings.scan_roots);
+        let is_under_scan_root = path_is_under_any_root(&self.new, &settings.scan_roots);
+        was_under_scan_root && !is_under_scan_root
+    }
 }
 
 impl MoveOp for AddManualRootOp {
-    fn describe(&self) -> String {
-        format!("Add to manual project roots:\n     {}", self.path)
+    fn describe(&self) -> Vec<String> {
+        if !self.should_apply() {
+            return vec![];
+        }
+        vec![format!("Add to manual project roots:\n     {}", self.new)]
     }
 
-    fn execute(&self) -> Result<String, String> {
-        log::info!("AddManualRootOp: {}", self.path);
+    fn execute(&self) -> Result<Vec<String>, String> {
+        if !self.should_apply() {
+            return Ok(vec![]);
+        }
+        log::info!("AddManualRootOp: {}", self.new);
         let mut settings = self.state.borrow().store.get_scan_settings();
-        if !settings.manual_project_roots.contains(&self.path) {
-            settings.manual_project_roots.push(self.path.clone());
+        if !settings.manual_project_roots.contains(&self.new) {
+            settings.manual_project_roots.push(self.new.clone());
             self.state.borrow().store.set_scan_settings(&settings);
         }
-        Ok("Added destination to manual project roots.".to_string())
+        Ok(vec!["Added destination to manual project roots.".to_string()])
     }
 }
 
@@ -2343,22 +2360,37 @@ struct UpdateManualRootOp {
     new: String,
 }
 
+impl UpdateManualRootOp {
+    fn should_apply(&self) -> bool {
+        let settings = self.state.borrow().store.get_scan_settings();
+        let was_under_scan_root = path_is_under_any_root(&self.old, &settings.scan_roots);
+        let was_manual = settings.manual_project_roots.iter().any(|r| r == &self.old);
+        !was_under_scan_root && was_manual
+    }
+}
+
 impl MoveOp for UpdateManualRootOp {
-    fn describe(&self) -> String {
-        format!(
+    fn describe(&self) -> Vec<String> {
+        if !self.should_apply() {
+            return vec![];
+        }
+        vec![format!(
             "Update manual project root:\n     {}\n  -> {}",
             self.old, self.new
-        )
+        )]
     }
 
-    fn execute(&self) -> Result<String, String> {
+    fn execute(&self) -> Result<Vec<String>, String> {
+        if !self.should_apply() {
+            return Ok(vec![]);
+        }
         log::info!("UpdateManualRootOp: {} -> {}", self.old, self.new);
         let mut settings = self.state.borrow().store.get_scan_settings();
         if let Some(pos) = settings.manual_project_roots.iter().position(|p| p == &self.old) {
             settings.manual_project_roots[pos] = self.new.clone();
             self.state.borrow().store.set_scan_settings(&settings);
         }
-        Ok("Updated manual project root path.".to_string())
+        Ok(vec!["Updated manual project root path.".to_string()])
     }
 }
 
@@ -2370,26 +2402,40 @@ struct MoveClaudeDirOp {
 }
 
 impl MoveOp for MoveClaudeDirOp {
-    fn describe(&self) -> String {
-        format!(
+    fn describe(&self) -> Vec<String> {
+        let claude_dir = self.old_claude
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("~/.claude/projects path");
+        if !claude_dir.exists() || !self.old_claude.exists() {
+            return vec![];
+        }
+        vec![format!(
             "Move Claude project data:\n     {}\n  -> {}",
             self.old_claude.display(),
             self.new_claude.display()
-        )
+        )]
     }
 
-    fn execute(&self) -> Result<String, String> {
+    fn execute(&self) -> Result<Vec<String>, String> {
+        let claude_dir = self.old_claude
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("~/.claude/projects path");
+        if !claude_dir.exists() || !self.old_claude.exists() {
+            return Ok(vec![]);
+        }
         log::info!("MoveClaudeDirOp: {} -> {}", self.old_claude.display(), self.new_claude.display());
         std::fs::rename(&self.old_claude, &self.new_claude)
             .map_err(|e| {
                 log::error!("MoveClaudeDirOp failed: {} -> {}: {}", self.old_claude.display(), self.new_claude.display(), e);
                 e.to_string()
             })?;
-        Ok(format!(
+        Ok(vec![format!(
             "Moved Claude project data:\n  {}\n  -> {}",
             self.old_claude.display(),
             self.new_claude.display()
-        ))
+        )])
     }
 }
 
@@ -2402,16 +2448,22 @@ struct UpdateCodexConfigOp {
 }
 
 impl MoveOp for UpdateCodexConfigOp {
-    fn describe(&self) -> String {
-        format!(
+    fn describe(&self) -> Vec<String> {
+        if !self.config_path.exists() {
+            return vec![];
+        }
+        vec![format!(
             "Update Codex config ({}):\n     {}\n  -> {}",
             self.config_path.display(),
             self.old,
             self.new
-        )
+        )]
     }
 
-    fn execute(&self) -> Result<String, String> {
+    fn execute(&self) -> Result<Vec<String>, String> {
+        if !self.config_path.exists() {
+            return Ok(vec![]);
+        }
         log::info!("UpdateCodexConfigOp: {} -> {} in {}", self.old, self.new, self.config_path.display());
         let content = std::fs::read_to_string(&self.config_path)
             .map_err(|e| format!("Read error ({}): {}", self.config_path.display(), e))?;
@@ -2420,78 +2472,58 @@ impl MoveOp for UpdateCodexConfigOp {
             std::fs::write(&self.config_path, &updated)
                 .map_err(|e| format!("Write error ({}): {}", self.config_path.display(), e))?;
         }
-        Ok("Updated Codex config with new path.".to_string())
+        Ok(vec!["Updated Codex config with new path.".to_string()])
     }
 }
 
 // ── Planning — build the operation list ─────────────────────────────────
 
 fn plan_move_operations(state: &State, old_path: &str, new_path: &str) -> Vec<Box<dyn MoveOp>> {
-    let mut ops: Vec<Box<dyn MoveOp>> = Vec::new();
-
-    ops.push(Box::new(MoveDirOp {
-        old: old_path.to_string(),
-        new: new_path.to_string(),
-    }));
-
-    ops.push(Box::new(UpdateMetadataOp {
-        state: state.clone(),
-        old: old_path.to_string(),
-        new: new_path.to_string(),
-        db_path: config_dir().join("db.json"),
-    }));
-
-    // Scan / manual root handling
-    let settings = state.borrow().store.get_scan_settings();
-    let was_under_scan_root = path_is_under_any_root(old_path, &settings.scan_roots);
-    let is_under_scan_root = path_is_under_any_root(new_path, &settings.scan_roots);
-    let was_manual = settings.manual_project_roots.iter().any(|r| r == old_path);
-
-    if was_under_scan_root && !is_under_scan_root {
-        ops.push(Box::new(AddManualRootOp {
-            state: state.clone(),
-            path: new_path.to_string(),
-        }));
-    } else if !was_under_scan_root && was_manual {
-        ops.push(Box::new(UpdateManualRootOp {
-            state: state.clone(),
-            old: old_path.to_string(),
-            new: new_path.to_string(),
-        }));
-    }
-
-    // Claude project data
     let home = std::env::var("HOME").unwrap_or_default();
-    let claude_dir = PathBuf::from(&home).join(".claude").join("projects");
-    if claude_dir.exists() {
-        let old_mangled = mangle_claude_path(old_path);
-        let new_mangled = mangle_claude_path(new_path);
-        let old_claude = claude_dir.join(&old_mangled);
-        if old_claude.exists() {
-            ops.push(Box::new(MoveClaudeDirOp {
-                old_claude,
-                new_claude: claude_dir.join(new_mangled),
-            }));
-        }
-    }
 
-    // Codex config
-    let codex_cfg = PathBuf::from(&home).join(".codex").join("config.toml");
-    if codex_cfg.exists() {
-        ops.push(Box::new(UpdateCodexConfigOp {
-            config_path: codex_cfg,
+    vec![
+        Box::new(MoveDirOp {
             old: old_path.to_string(),
             new: new_path.to_string(),
-        }));
-    }
-
-    ops
+        }),
+        Box::new(UpdateMetadataOp {
+            state: state.clone(),
+            old: old_path.to_string(),
+            new: new_path.to_string(),
+            db_path: config_dir().join("db.json"),
+        }),
+        Box::new(AddManualRootOp {
+            state: state.clone(),
+            old: old_path.to_string(),
+            new: new_path.to_string(),
+        }),
+        Box::new(UpdateManualRootOp {
+            state: state.clone(),
+            old: old_path.to_string(),
+            new: new_path.to_string(),
+        }),
+        Box::new(MoveClaudeDirOp {
+            old_claude: {
+                let dir = PathBuf::from(&home).join(".claude/projects");
+                dir.join(mangle_claude_path(old_path))
+            },
+            new_claude: {
+                let dir = PathBuf::from(&home).join(".claude/projects");
+                dir.join(mangle_claude_path(new_path))
+            },
+        }),
+        Box::new(UpdateCodexConfigOp {
+            config_path: PathBuf::from(&home).join(".codex/config.toml"),
+            old: old_path.to_string(),
+            new: new_path.to_string(),
+        }),
+    ]
 }
 
 // ── Execution helpers ──────────────────────────────────────────────────
 
 fn run_dry_run(ops: &[Box<dyn MoveOp>]) -> Vec<String> {
-    ops.iter().map(|op| op.describe()).collect()
+    ops.iter().flat_map(|op| op.describe()).collect()
 }
 
 fn run_execute(
@@ -2500,12 +2532,13 @@ fn run_execute(
 ) -> Result<Vec<String>, String> {
     let mut results = Vec::new();
     for op in ops {
+        let descriptions = op.describe();
         match op.execute() {
-            Ok(desc) => results.push(desc),
+            Ok(mut lines) => results.append(&mut lines),
             Err(e) => {
                 log::error!(
                     "Failed to move project. Operation: {}. Error: {}",
-                    op.describe(),
+                    descriptions.join("\n"),
                     e
                 );
                 let err_dialog = gtk4::AlertDialog::builder()
