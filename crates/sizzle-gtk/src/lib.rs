@@ -488,7 +488,7 @@ fn populate_list(state: &State) {
                 }
             }
             if let Some(l) = last {
-                if l != row.last_child().as_ref() {
+                if Some(&l) != row.last_child().as_ref() {
                     // Re-check from the end if the list was modified by unparent
                     let mut c = Some(l.clone());
                     while let Some(child) = c {

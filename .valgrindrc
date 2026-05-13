@@ -1,0 +1,8 @@
+--suppressions=/usr/share/glib-2.0/valgrind/glib.supp
+--suppressions=/usr/share/gtk-4.0/valgrind/gtk.supp
+--tool=memcheck
+--leak-check=full
+--show-leak-kinds=definite,possible
+--track-origins=yes
+--num-callers=40
+--keep-debuginfo=yes

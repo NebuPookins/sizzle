@@ -75,6 +75,20 @@ cargo build --release -p sizzle-gtk
 
 The binary will be at `target/release/sizzle-gtk`.
 
+## Debugging
+
+### Memory Leaks
+
+A helper script runs the app under Valgrind with GTK4 and GLib suppression files to filter out false positives:
+
+```bash
+./scripts/valgrind.sh
+```
+
+The script builds with debug symbols (set in `Cargo.toml`'s dev profile) then launches Valgrind. Options passed to the script are forwarded to the binary.
+
+Valgrind settings are read from `.valgrindrc` in the project root — override any flag there or pass `--show-leak-kinds=all` to see still-reachable allocations as well.
+
 ## Config Storage
 
 By default, Sizzle stores its local state under:
