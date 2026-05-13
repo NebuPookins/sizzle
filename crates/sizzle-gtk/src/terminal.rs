@@ -655,10 +655,15 @@ fn draw_term(
     let base_font = pango::FontDescription::from_string(&format!("Monospace {FONT_PT}"));
     layout.set_font_description(Some(&base_font));
 
-    for ic in content.display_iter {
+    // Collect cells so we can do two-pass rendering (backgrounds first,
+    // then text) — this prevents descenders from being painted over by
+    // the next row's background fill.
+    let cells: Vec<_> = content.display_iter.collect();
+
+    // First pass: backgrounds
+    for ic in &cells {
         let col = ic.point.column.0;
         let row = ic.point.line.0;
-        // Map grid line to screen row using display_offset
         let screen_row = row + display_offset as i32;
         if screen_row < 0 || screen_row >= rows as i32 {
             continue;
@@ -670,7 +675,6 @@ fn draw_term(
         let x = col as f64 * CELL_W;
         let y = screen_row as f64 * CELL_H;
         let cell = &ic.cell;
-        // Hide cursor when scrolled back
         let on_cursor = ic.point == cursor_pt && display_offset == 0;
 
         let is_selected = !on_cursor
@@ -688,6 +692,29 @@ fn draw_term(
         cr.set_source_rgb(br, bg, bb);
         cr.rectangle(x, y, CELL_W, CELL_H);
         cr.fill().ok();
+    }
+
+    // Second pass: foreground text, drawn on top of all backgrounds
+    for ic in &cells {
+        let col = ic.point.column.0;
+        let row = ic.point.line.0;
+        let screen_row = row + display_offset as i32;
+        if screen_row < 0 || screen_row >= rows as i32 {
+            continue;
+        }
+        if col >= cols {
+            continue;
+        }
+
+        let x = col as f64 * CELL_W;
+        let y = screen_row as f64 * CELL_H;
+        let cell = &ic.cell;
+        let on_cursor = ic.point == cursor_pt && display_offset == 0;
+
+        let is_selected = !on_cursor
+            && selection
+                .as_ref()
+                .map_or(false, |sel| sel.contains_cell(&ic, ic.point, cursor_shape));
 
         let ch = cell.c;
         if ch == ' ' || ch == '\0' {
