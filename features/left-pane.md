@@ -72,13 +72,14 @@ following options:
 "Move/Rename projects" lets the user enter in a new path. If the new path
 is under any of the "ignore roots", a warning is displayed.
 
-The project will then be moved to that path, and additionally the following
-things will happen:
+There's a list of actions that will happen, and we go through the list in
+2 paths. First, we create an empty list of "changes" that will gradually
+populate and then display to the user for them to review. Then, we go through
+this list in "dry run" mode, where we don't actually perform the actions,
+but we record what actions we would have performed:
 
-- We create an empty list of "changes" which we will gradually populate and
-  then display to the user for them to review.
-- We actually move or rename the project root directory to reflect the new
-  path. We also record this as one of the changes in our list of changes.
+- Move or rename the project root directory to reflect the new
+  path.
 - If the project was under a scan root and the destination would no longer be
   under any scan root, then the project's path is added to the "manually added
   project roots".
@@ -88,12 +89,13 @@ things will happen:
 - If there is a directory "~/.claude/projects", then we presume Claude is
   installed on the user's system. There will be a folder for every project
   managed by Claude code, mangled so that the full path can be represented as
-  as a single directory. We will rename that folder to reflect the new path,
-  and also add this as one of the changes e.g. `changes.push("Moved Claude project data:\n ${oldClaudeDir}\n -> ${newClaudeDir}")`.
+  as a single directory. We will rename that folder to reflect the new path.
 - Similarly, if there is a file "~/.codex/config.toml", we presume that the
   user has Codex installed, and we update the file to reflect the new path.
-  We also add this to the list of changes.
-- Finally, we show the list of changes we performed to the user.
+
+After going through the list, we show our computed list of changes to the
+user to confirm. If they accept, we go through the list again, but this time
+actually perform the actions.
 
 ### List of Projects - Context Menu - Add to Ignored Roots
 
