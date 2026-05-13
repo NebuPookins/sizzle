@@ -40,6 +40,7 @@ impl Dimensions for TermSize {
 #[derive(Clone)]
 pub struct DirtyFlag {
     pub dirty: Arc<AtomicBool>,
+    last_write_time: Arc<Mutex<Instant>>,
     on_exit: Arc<Mutex<Option<Box<dyn Fn() + Send>>>>,
     write_fn: Arc<Mutex<Option<Box<dyn Fn(Vec<u8>) + Send>>>>,
 }
@@ -48,9 +49,15 @@ impl DirtyFlag {
     pub fn new() -> Self {
         Self {
             dirty: Arc::new(AtomicBool::new(true)),
+            last_write_time: Arc::new(Mutex::new(Instant::now())),
             on_exit: Arc::new(Mutex::new(None)),
             write_fn: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Returns true if no PtyWrite has been received in the last 5 seconds.
+    pub fn is_idle(&self) -> bool {
+        self.last_write_time.lock().unwrap().elapsed() > Duration::from_secs(5)
     }
 
     pub fn set_write_fn<F: Fn(Vec<u8>) + Send + 'static>(&self, f: F) {
@@ -68,6 +75,7 @@ impl EventListener for DirtyFlag {
                 }
             }
             Event::PtyWrite(text) => {
+                *self.last_write_time.lock().unwrap() = Instant::now();
                 if let Some(ref wf) = *self.write_fn.lock().unwrap() {
                     wf(text.into_bytes());
                 }
@@ -201,6 +209,41 @@ impl TerminalWidget {
             if (kv == gdk::Key::c && ctrl && shift) || (kv == gdk::Key::Insert && ctrl) {
                 copy_selection(term.clone());
                 return glib::Propagation::Stop;
+            }
+
+            // Shift+PageUp / Shift+PageDown → scroll terminal history by one page
+            if shift {
+                let page_lines = {
+                    let t = term.lock();
+                    t.grid().screen_lines() as i32
+                };
+                match kv {
+                    gdk::Key::Page_Up if page_lines > 0 => {
+                        term.lock().selection = None;
+                        term.lock().scroll_display(Scroll::Delta(page_lines));
+                        let (doff, history) = {
+                            let locked = term.lock();
+                            let g = locked.grid();
+                            (g.display_offset(), g.total_lines().saturating_sub(g.screen_lines()) as f64)
+                        };
+                        adj.set_value((history - doff as f64).max(0.0));
+                        da.queue_draw();
+                        return glib::Propagation::Stop;
+                    }
+                    gdk::Key::Page_Down if page_lines > 0 => {
+                        term.lock().selection = None;
+                        term.lock().scroll_display(Scroll::Delta(-page_lines));
+                        let (doff, history) = {
+                            let locked = term.lock();
+                            let g = locked.grid();
+                            (g.display_offset(), g.total_lines().saturating_sub(g.screen_lines()) as f64)
+                        };
+                        adj.set_value((history - doff as f64).max(0.0));
+                        da.queue_draw();
+                        return glib::Propagation::Stop;
+                    }
+                    _ => {}
+                }
             }
 
             // Jump to bottom on any key press if scrolled back

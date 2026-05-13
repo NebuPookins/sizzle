@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#120E1A" />
+      <stop offset="100%" stop-color="#1F1633" />
+    </linearGradient>
+
+    <!-- Sizzle Flame Gradient -->
+    <linearGradient id="neonGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF2A5A" />
+      <stop offset="50%" stop-color="#FF7A00" />
+      <stop offset="100%" stop-color="#FFD600" />
+    </linearGradient>
+
+    <!-- LLM Magic Spark Gradient -->
+    <linearGradient id="aiGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#8A2BE2" />
+    </linearGradient>
+
+    <!-- Grid Pattern for IDE aesthetic -->
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#FFFFFF" stroke-opacity="0.02" stroke-width="1"/>
+    </pattern>
+
+    <!-- Glowing Filters -->
+    <filter id="neonGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="16" result="blur1" />
+      <feGaussianBlur stdDeviation="32" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="aiGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10" result="blur1" />
+      <feMerge>
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Base App Icon Shape (Standard macOS/iOS rounding) -->
+  <rect width="512" height="512" rx="115" fill="url(#bgGrad)" />
+  
+  <!-- Subtle IDE Grid Overlay -->
+  <rect width="512" height="512" rx="115" fill="url(#grid)" />
+
+  <!-- Background Code Brackets < > -->
+  <g stroke="#FFFFFF" stroke-opacity="0.04" stroke-width="36" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 150 166 L 60 256 L 150 346" />
+    <path d="M 362 166 L 452 256 L 362 346" />
+  </g>
+
+  <!-- MAIN SIZZLE LOGO: The 'S' / Flame Shape -->
+  <!-- Outer glowing plasma stroke -->
+  <path d="M 356 176 
+           C 356 96, 196 96, 196 196 
+           C 196 276, 356 256, 356 336 
+           C 356 416, 196 416, 156 346" 
+        stroke="url(#neonGrad)" stroke-width="48" stroke-linecap="round" fill="none" filter="url(#neonGlow)" />
+        
+  <!-- Inner bright searing core -->
+  <path d="M 356 176 
+           C 356 96, 196 96, 196 196 
+           C 196 276, 356 256, 356 336 
+           C 356 416, 196 416, 156 346" 
+        stroke="#FFF5E6" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.9" />
+
+  <!-- LLM AGENT SPARKS -->
+  <!-- Top Right Spark -->
+  <path d="M 380 70 
+           C 380 115, 360 130, 310 130 
+           C 360 130, 380 145, 380 190 
+           C 380 145, 400 130, 450 130 
+           C 400 130, 380 115, 380 70 Z" 
+        fill="url(#aiGrad)" filter="url(#aiGlow)" />
+
+  <!-- Bottom Left Spark (Smaller) -->
+  <path d="M 160 360 
+           C 160 385, 145 400, 115 400 
+           C 145 400, 160 415, 160 440 
+           C 160 415, 175 400, 205 400 
+           C 175 400, 160 385, 160 360 Z" 
+        fill="url(#aiGrad)" filter="url(#aiGlow)" />
+</svg>

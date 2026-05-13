@@ -13,7 +13,7 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
-    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned,
+    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, Picture,
     ScrolledWindow, Stack, StackTransitionType, StyleContext, TextView, WrapMode,
 };
 
@@ -23,6 +23,8 @@ use sizzle_core::{AgentPreset, MetadataStore, ScanSettings, ScannedProject, scan
 
 struct ProjectWidgets {
     git_view: TextView,
+    agent_terminal: Option<terminal::TerminalWidget>,
+    shell_terminal: Option<terminal::TerminalWidget>,
 }
 
 struct AppState {
@@ -35,6 +37,7 @@ struct AppState {
     active_terminals: HashMap<String, usize>,
     last_terminal_activity: HashMap<String, Vec<Arc<Mutex<Option<Instant>>>>>,
     pending_exits: Arc<Mutex<Vec<String>>>,
+    focus_memory: HashMap<String, String>,
 }
 
 type State = Rc<RefCell<AppState>>;
@@ -48,7 +51,30 @@ pub fn run() {
         .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
         .build();
     app.connect_activate(build_ui);
+    install_app_icon();
     app.run();
+}
+
+/// Install the app icon to the user's XDG icon theme directory on first run so
+/// `WindowExt::set_icon_name` can resolve it.
+fn install_app_icon() {
+    use std::path::PathBuf;
+
+    let svg_data = include_bytes!("../../../assets/icons/app-icon.svg");
+    let icon_name = "net.nebupookins.sizzle";
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            PathBuf::from(home).join(".local/share")
+        });
+    let icon_dir = data_home.join("icons/hicolor/scalable/apps");
+    let icon_path = icon_dir.join(format!("{icon_name}.svg"));
+    if icon_path.exists() {
+        return;
+    }
+    std::fs::create_dir_all(&icon_dir).ok();
+    let _ = std::fs::write(&icon_path, svg_data);
 }
 
 // ── Config dir ────────────────────────────────────────────────────────────
@@ -188,6 +214,7 @@ fn build_ui(app: &Application) {
         .child(&outer_paned)
         .build();
     window.set_titlebar(Some(&header));
+    window.set_icon_name(Some("net.nebupookins.sizzle"));
 
     let state = Rc::new(RefCell::new(AppState {
         store: store.clone(),
@@ -199,6 +226,7 @@ fn build_ui(app: &Application) {
         active_terminals: HashMap::new(),
         last_terminal_activity: HashMap::new(),
         pending_exits: Arc::new(Mutex::new(Vec::new())),
+        focus_memory: HashMap::new(),
     }));
 
     populate_list(&state);
@@ -206,21 +234,33 @@ fn build_ui(app: &Application) {
     {
         let state = state.clone();
         search.connect_changed(move |entry| {
-            let text = entry.text();
-            let is_case_sensitive = text.chars().any(|c| c.is_uppercase());
-            let search_for = if is_case_sensitive { text.to_string() } else { text.to_lowercase() };
+            let query = entry.text();
+            let query_lower = query.to_lowercase();
+            let case_sensitive = query.chars().any(|c| c.is_uppercase());
             let st = state.borrow();
             let mut i = 0;
             while let Some(row) = st.list_box.row_at_index(i) {
-                let label_text = row.child()
-                    .and_downcast::<GtkBox>()
-                    .and_then(|b| b.first_child())
-                    .and_downcast::<GtkBox>()
-                    .and_then(|b| b.first_child())
-                    .and_downcast::<Label>()
-                    .map(|l| if is_case_sensitive { l.text().to_string() } else { l.text().to_lowercase() })
-                    .unwrap_or_default();
-                row.set_visible(text.is_empty() || label_text.contains(&search_for));
+                let path = row.widget_name();
+                // Match against project data directly instead of navigating widget children,
+                // which fails when a dot DrawingArea is prepended for active projects.
+                let visible = if query.is_empty() {
+                    true
+                } else {
+                    st.projects.iter().find(|p| p.path == path).map_or(false, |p| {
+                        let tag = p.detected_tags.first().map(|t| t.name.as_str()).unwrap_or("");
+                        let label = if tag.is_empty() {
+                            p.name.clone()
+                        } else {
+                            format!("{} [{}]", p.name, tag)
+                        };
+                        if case_sensitive {
+                            label.contains(query.as_str())
+                        } else {
+                            label.to_lowercase().contains(&query_lower as &str)
+                        }
+                    })
+                };
+                row.set_visible(visible);
                 i += 1;
             }
         });
@@ -377,11 +417,12 @@ fn populate_list(state: &State) {
 
     let mut sorted: Vec<&ScannedProject> = st.projects.iter().collect();
     sorted.sort_by_key(|p| {
+        let is_active = st.active_terminals.contains_key(&p.path);
         let meta = all_meta.get(&p.path);
         let marker_key = marker_sort_key(meta.and_then(|m| m.marker.as_deref()));
         let time_key = Reverse(meta.and_then(|m| m.last_launched));
         let name_key = p.name.to_lowercase();
-        (marker_key, time_key, name_key)
+        (!is_active, marker_key, time_key, name_key)
     });
 
     for project in sorted {
@@ -703,11 +744,16 @@ fn select_project(state: &State, path: &str) {
             }
 
             st.project_stack.add_named(&project_box, Some(&path));
-            st.project_widgets.insert(path.clone(), ProjectWidgets { git_view });
+            st.project_widgets.insert(path.clone(), ProjectWidgets {
+                git_view,
+                agent_terminal: None,
+                shell_terminal: None,
+            });
         }
     }
 
-    {
+    // Phase 1: immutable borrow to set visible child + read focus memory
+    let focus_key = {
         let st = state.borrow();
         st.project_stack.set_visible_child_name(&path);
         st.git_stack.set_visible_child_name(&path);
@@ -715,6 +761,22 @@ fn select_project(state: &State, path: &str) {
             update_git_status(&path, &pw.git_view);
         }
         st.store.set_last_launched(&path);
+        st.focus_memory.get(&path).cloned()
+    };
+
+    // Phase 2: restore focus memory
+    // Important: clone the terminal out first, then call focus() outside the borrow,
+    // because focus() triggers the focus-in callback which also borrows state.
+    if let Some(key) = focus_key {
+        let terminal = state.borrow().project_widgets.get(&path).and_then(|pw| {
+            match key.as_str() {
+                "shell" => pw.shell_terminal.clone(),
+                _ => pw.agent_terminal.clone(),
+            }
+        });
+        if let Some(t) = terminal {
+            t.focus();
+        }
     }
 }
 
@@ -828,6 +890,19 @@ fn build_explorer_tab(project_root: &str) -> Paned {
     md_container.append(&md_view.scroll);
     content_stack.add_named(&md_container, Some("markdown"));
 
+    let image_view = gtk4::Picture::new();
+    image_view.set_hexpand(true);
+    image_view.set_vexpand(true);
+    image_view.set_keep_aspect_ratio(true);
+    let image_scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Automatic)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .hexpand(true)
+        .vexpand(true)
+        .child(&image_view)
+        .build();
+    content_stack.add_named(&image_scroll, Some("image"));
+
     // Wire up explorer markdown edit/save/cancel
     {
         let mv = md_view.clone();
@@ -908,13 +983,14 @@ fn build_explorer_tab(project_root: &str) -> Paned {
         let eb = md_edit_btn.clone();
         let sb = md_save_btn.clone();
         let cb = md_cancel_btn.clone();
+        let iv = image_view.clone();
 
         file_list.connect_row_activated(move |_, row| {
             let path = row.widget_name().to_string();
             if std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false) {
                 explorer_load_dir(&fl, &pl, &bb, &pr, path, &cd);
             } else {
-                explorer_show_file(&cs, &tv, &mv, &ml, &pr, &path);
+                explorer_show_file(&cs, &tv, &mv, &ml, &iv, &pr, &path);
                 // Track the current file for markdown editing
                 if cs.visible_child_name().as_deref() == Some("markdown") {
                     *md_path.borrow_mut() = Some(path);
@@ -990,6 +1066,7 @@ fn explorer_show_file(
     text_view: &TextView,
     md_view: &markdown::MarkdownView,
     msg_lbl: &Label,
+    image_view: &Picture,
     project_root: &str,
     file_path: &str,
 ) {
@@ -1011,6 +1088,18 @@ fn explorer_show_file(
             } else {
                 text_view.buffer().set_text(&content);
                 content_stack.set_visible_child_name("text");
+            }
+        }
+        "media" => {
+            if preview.mime_type.as_deref().map_or(false, |m| m.starts_with("image/")) {
+                image_view.set_filename(Some(file_path));
+                content_stack.set_visible_child_name("image");
+            } else if let Some(mime) = preview.mime_type {
+                msg_lbl.set_text(&format!("Preview not available for {}", mime));
+                content_stack.set_visible_child_name("message");
+            } else {
+                msg_lbl.set_text("Cannot preview this file type");
+                content_stack.set_visible_child_name("message");
             }
         }
         "tooLarge" => {
@@ -1041,6 +1130,8 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
     let agent = terminal::TerminalWidget::new(Some(path), agent_cmd);
     let shell  = terminal::TerminalWidget::new(Some(path), None);
 
+    let p = path.to_string(); // owned for closures
+
     // Store activity timestamps for the status dot
     {
         let mut st = state.borrow_mut();
@@ -1058,17 +1149,23 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
     {
         let a = agent.clone();
         let s = shell.clone();
+        let st = state.clone();
+        let p_clone = p.clone();
         agent.connect_focus_in(move || {
             a.set_focused(true);
             s.set_focused(false);
+            st.borrow_mut().focus_memory.insert(p_clone.clone(), "agent".to_string());
         });
     }
     {
         let a = agent.clone();
         let s = shell.clone();
+        let st = state.clone();
+        let p_clone = p.clone();
         shell.connect_focus_in(move || {
             s.set_focused(true);
             a.set_focused(false);
+            st.borrow_mut().focus_memory.insert(p_clone.clone(), "shell".to_string());
         });
     }
     // When either terminal's child process exits, push to pending_exits so the
@@ -1121,6 +1218,12 @@ fn launch_terminals(path: &str, tab_label: &str, agent_cmd: Option<String>, note
     });
 
     agent.focus();
+
+    // Store terminal references for focus memory restoration when switching back
+    if let Some(pw) = state.borrow_mut().project_widgets.get_mut(path) {
+        pw.agent_terminal = Some(agent);
+        pw.shell_terminal = Some(shell);
+    }
 }
 
 // ── Git status view ────────────────────────────────────────────────────────
@@ -1557,7 +1660,6 @@ fn show_agent_preset_dialog(
 
     win.present();
 }
-
 
 // ── Memory usage ──────────────────────────────────────────────────────────
 
