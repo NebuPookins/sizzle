@@ -13,8 +13,8 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
-    HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, Picture, ScrolledWindow,
-    Stack, StackTransitionType, TextView, WrapMode,
+    GestureClick, HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, Picture,
+    Popover, ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
 };
 
 use sizzle_core::{scan_projects, AgentPreset, MetadataStore, ScanSettings, ScannedProject};
@@ -58,6 +58,7 @@ struct AppState {
     last_terminal_activity: HashMap<String, Vec<Arc<Mutex<Option<Instant>>>>>,
     pending_exits: Arc<Mutex<Vec<String>>>,
     focus_memory: HashMap<String, String>,
+    main_window: gtk4::Window,
 }
 
 type State = Rc<RefCell<AppState>>;
@@ -250,6 +251,7 @@ fn build_ui(app: &Application) {
         last_terminal_activity: HashMap::new(),
         pending_exits: Arc::new(Mutex::new(Vec::new())),
         focus_memory: HashMap::new(),
+        main_window: window.clone().upcast(),
     }));
 
     populate_list(&state);
@@ -427,6 +429,17 @@ fn build_ui(app: &Application) {
              min-width: 18px;
              min-height: 18px;
              padding: 0;
+         }
+         popover {
+             background: #2a2e38;
+             border: 1px solid #3a404b;
+             border-radius: 6px;
+         }
+         popover label, popover button {
+             color: #cdd6f4;
+         }
+         popover button:hover {
+             background: #3a404b;
          }",
     );
     if let Some(display) = gdk::Display::default() {
@@ -598,6 +611,86 @@ fn populate_list(state: &State) {
         row.set_widget_name(&project.path);
         row.set_child(Some(&row_box));
         st.list_box.append(&row);
+
+        // ── Right-click context menu ────────────────────────────────────
+        {
+            let gesture = GestureClick::new();
+            gesture.set_button(3);
+
+            let context_popover = Popover::builder()
+                .has_arrow(false)
+                .build();
+            let popover_vbox = GtkBox::new(Orientation::Vertical, 0);
+
+            let move_btn = Button::with_label("Move/Rename Project");
+            move_btn.set_has_frame(false);
+            move_btn.set_halign(gtk4::Align::Start);
+            move_btn.set_margin_start(4);
+            move_btn.set_margin_end(4);
+            move_btn.set_margin_top(2);
+            move_btn.set_margin_bottom(2);
+            popover_vbox.append(&move_btn);
+
+            let ignore_btn = Button::with_label("Add to Ignored Roots");
+            ignore_btn.set_has_frame(false);
+            ignore_btn.set_halign(gtk4::Align::Start);
+            ignore_btn.set_margin_start(4);
+            ignore_btn.set_margin_end(4);
+            ignore_btn.set_margin_top(2);
+            ignore_btn.set_margin_bottom(2);
+            popover_vbox.append(&ignore_btn);
+
+            let is_favorite = all_meta
+                .get(&project.path)
+                .and_then(|m| m.marker.as_deref())
+                == Some("favorite");
+            if is_favorite {
+                let sep = gtk4::Separator::new(Orientation::Horizontal);
+                popover_vbox.append(&sep);
+                let unmark_btn = Button::with_label("Remove from Favorites");
+                unmark_btn.set_has_frame(false);
+                unmark_btn.set_halign(gtk4::Align::Start);
+                unmark_btn.set_margin_start(4);
+                unmark_btn.set_margin_end(4);
+                unmark_btn.set_margin_top(2);
+                unmark_btn.set_margin_bottom(2);
+                popover_vbox.append(&unmark_btn);
+
+                let unmark_path = project.path.clone();
+                let unmark_state = state.clone();
+                let popover_close = context_popover.clone();
+                unmark_btn.connect_clicked(move |_| {
+                    popover_close.popdown();
+                    unmark_state.borrow().store.set_project_marker(&unmark_path, None);
+                    populate_list(&unmark_state);
+                });
+            }
+
+            context_popover.set_child(Some(&popover_vbox));
+
+            let popover_gesture = context_popover.clone();
+            gesture.connect_pressed(move |_, _, _, _| {
+                popover_gesture.popup();
+            });
+            context_popover.set_parent(&row);
+            row.add_controller(gesture);
+
+            let path_mr = project.path.clone();
+            let state_mr = state.clone();
+            let popover_close = context_popover.clone();
+            move_btn.connect_clicked(move |_| {
+                popover_close.popdown();
+                show_move_rename_dialog(&state_mr, &path_mr);
+            });
+
+            let path_ig = project.path.clone();
+            let state_ig = state.clone();
+            let popover_close2 = context_popover.clone();
+            ignore_btn.connect_clicked(move |_| {
+                popover_close2.popdown();
+                add_to_ignored_roots(&state_ig, &path_ig);
+            });
+        }
 
         {
             let path = project.path.clone();
@@ -2142,4 +2235,541 @@ fn read_mem_breakdown() -> Option<(u64, u64)> {
     }
 
     Some((app_kb, agent_kb))
+}
+
+// ── Move/Rename Project ──────────────────────────────────────────────────
+
+fn path_is_under_any_root(path: &str, roots: &[String]) -> bool {
+    let p = std::path::Path::new(path);
+    roots.iter().any(|r| p.starts_with(r))
+}
+
+fn mangle_claude_path(path: &str) -> String {
+    path.replace('/', "-")
+}
+
+// ── Trait for individual move/rename operations ─────────────────────────
+
+trait MoveOp {
+    /// Side-effect-free description (used during dry run).
+    fn describe(&self) -> String;
+    /// Perform the operation for real. Returns a human-readable result or an error.
+    fn execute(&self) -> Result<String, String>;
+}
+
+// ── 1. Move the directory on disk ───────────────────────────────────────
+
+struct MoveDirOp {
+    old: String,
+    new: String,
+}
+
+impl MoveOp for MoveDirOp {
+    fn describe(&self) -> String {
+        format!("Move project directory:\n     {}\n  -> {}", self.old, self.new)
+    }
+
+    fn execute(&self) -> Result<String, String> {
+        log::info!("MoveDirOp: {} -> {}", self.old, self.new);
+        std::fs::rename(&self.old, &self.new)
+            .map_err(|e| {
+                log::error!("MoveDirOp failed: {} -> {}: {}", self.old, self.new, e);
+                e.to_string()
+            })?;
+        Ok(format!(
+            "Moved project directory:\n  {}\n  -> {}",
+            self.old, self.new
+        ))
+    }
+}
+
+// ── 2. Update metadata key in db.json ───────────────────────────────────
+
+struct UpdateMetadataOp {
+    state: State,
+    old: String,
+    new: String,
+    db_path: PathBuf,
+}
+
+impl MoveOp for UpdateMetadataOp {
+    fn describe(&self) -> String {
+        format!(
+            "Update project metadata ({}):\n     {}\n  -> {}",
+            self.db_path.display(),
+            self.old,
+            self.new
+        )
+    }
+
+    fn execute(&self) -> Result<String, String> {
+        log::info!("UpdateMetadataOp: {} -> {}", self.old, self.new);
+        self.state
+            .borrow()
+            .store
+            .rename_project_metadata(&self.old, &self.new);
+        Ok("Updated project metadata.".to_string())
+    }
+}
+
+// ── 3. Add destination to manual project roots ─────────────────────────
+
+struct AddManualRootOp {
+    state: State,
+    path: String,
+}
+
+impl MoveOp for AddManualRootOp {
+    fn describe(&self) -> String {
+        format!("Add to manual project roots:\n     {}", self.path)
+    }
+
+    fn execute(&self) -> Result<String, String> {
+        log::info!("AddManualRootOp: {}", self.path);
+        let mut settings = self.state.borrow().store.get_scan_settings();
+        if !settings.manual_project_roots.contains(&self.path) {
+            settings.manual_project_roots.push(self.path.clone());
+            self.state.borrow().store.set_scan_settings(&settings);
+        }
+        Ok("Added destination to manual project roots.".to_string())
+    }
+}
+
+// ── 3b. Update existing manual project root entry ──────────────────────
+
+struct UpdateManualRootOp {
+    state: State,
+    old: String,
+    new: String,
+}
+
+impl MoveOp for UpdateManualRootOp {
+    fn describe(&self) -> String {
+        format!(
+            "Update manual project root:\n     {}\n  -> {}",
+            self.old, self.new
+        )
+    }
+
+    fn execute(&self) -> Result<String, String> {
+        log::info!("UpdateManualRootOp: {} -> {}", self.old, self.new);
+        let mut settings = self.state.borrow().store.get_scan_settings();
+        if let Some(pos) = settings.manual_project_roots.iter().position(|p| p == &self.old) {
+            settings.manual_project_roots[pos] = self.new.clone();
+            self.state.borrow().store.set_scan_settings(&settings);
+        }
+        Ok("Updated manual project root path.".to_string())
+    }
+}
+
+// ── 4. Rename Claude project data directory ────────────────────────────
+
+struct MoveClaudeDirOp {
+    old_claude: PathBuf,
+    new_claude: PathBuf,
+}
+
+impl MoveOp for MoveClaudeDirOp {
+    fn describe(&self) -> String {
+        format!(
+            "Move Claude project data:\n     {}\n  -> {}",
+            self.old_claude.display(),
+            self.new_claude.display()
+        )
+    }
+
+    fn execute(&self) -> Result<String, String> {
+        log::info!("MoveClaudeDirOp: {} -> {}", self.old_claude.display(), self.new_claude.display());
+        std::fs::rename(&self.old_claude, &self.new_claude)
+            .map_err(|e| {
+                log::error!("MoveClaudeDirOp failed: {} -> {}: {}", self.old_claude.display(), self.new_claude.display(), e);
+                e.to_string()
+            })?;
+        Ok(format!(
+            "Moved Claude project data:\n  {}\n  -> {}",
+            self.old_claude.display(),
+            self.new_claude.display()
+        ))
+    }
+}
+
+// ── 5. Update Codex config ─────────────────────────────────────────────
+
+struct UpdateCodexConfigOp {
+    config_path: PathBuf,
+    old: String,
+    new: String,
+}
+
+impl MoveOp for UpdateCodexConfigOp {
+    fn describe(&self) -> String {
+        format!(
+            "Update Codex config ({}):\n     {}\n  -> {}",
+            self.config_path.display(),
+            self.old,
+            self.new
+        )
+    }
+
+    fn execute(&self) -> Result<String, String> {
+        log::info!("UpdateCodexConfigOp: {} -> {} in {}", self.old, self.new, self.config_path.display());
+        let content = std::fs::read_to_string(&self.config_path)
+            .map_err(|e| format!("Read error ({}): {}", self.config_path.display(), e))?;
+        let updated = content.replace(&self.old, &self.new);
+        if updated != content {
+            std::fs::write(&self.config_path, &updated)
+                .map_err(|e| format!("Write error ({}): {}", self.config_path.display(), e))?;
+        }
+        Ok("Updated Codex config with new path.".to_string())
+    }
+}
+
+// ── Planning — build the operation list ─────────────────────────────────
+
+fn plan_move_operations(state: &State, old_path: &str, new_path: &str) -> Vec<Box<dyn MoveOp>> {
+    let mut ops: Vec<Box<dyn MoveOp>> = Vec::new();
+
+    ops.push(Box::new(MoveDirOp {
+        old: old_path.to_string(),
+        new: new_path.to_string(),
+    }));
+
+    ops.push(Box::new(UpdateMetadataOp {
+        state: state.clone(),
+        old: old_path.to_string(),
+        new: new_path.to_string(),
+        db_path: config_dir().join("db.json"),
+    }));
+
+    // Scan / manual root handling
+    let settings = state.borrow().store.get_scan_settings();
+    let was_under_scan_root = path_is_under_any_root(old_path, &settings.scan_roots);
+    let is_under_scan_root = path_is_under_any_root(new_path, &settings.scan_roots);
+    let was_manual = settings.manual_project_roots.iter().any(|r| r == old_path);
+
+    if was_under_scan_root && !is_under_scan_root {
+        ops.push(Box::new(AddManualRootOp {
+            state: state.clone(),
+            path: new_path.to_string(),
+        }));
+    } else if !was_under_scan_root && was_manual {
+        ops.push(Box::new(UpdateManualRootOp {
+            state: state.clone(),
+            old: old_path.to_string(),
+            new: new_path.to_string(),
+        }));
+    }
+
+    // Claude project data
+    let home = std::env::var("HOME").unwrap_or_default();
+    let claude_dir = PathBuf::from(&home).join(".claude").join("projects");
+    if claude_dir.exists() {
+        let old_mangled = mangle_claude_path(old_path);
+        let new_mangled = mangle_claude_path(new_path);
+        let old_claude = claude_dir.join(&old_mangled);
+        if old_claude.exists() {
+            ops.push(Box::new(MoveClaudeDirOp {
+                old_claude,
+                new_claude: claude_dir.join(new_mangled),
+            }));
+        }
+    }
+
+    // Codex config
+    let codex_cfg = PathBuf::from(&home).join(".codex").join("config.toml");
+    if codex_cfg.exists() {
+        ops.push(Box::new(UpdateCodexConfigOp {
+            config_path: codex_cfg,
+            old: old_path.to_string(),
+            new: new_path.to_string(),
+        }));
+    }
+
+    ops
+}
+
+// ── Execution helpers ──────────────────────────────────────────────────
+
+fn run_dry_run(ops: &[Box<dyn MoveOp>]) -> Vec<String> {
+    ops.iter().map(|op| op.describe()).collect()
+}
+
+fn run_execute(
+    ops: &[Box<dyn MoveOp>],
+    parent: &gtk4::Window,
+) -> Result<Vec<String>, String> {
+    let mut results = Vec::new();
+    for op in ops {
+        match op.execute() {
+            Ok(desc) => results.push(desc),
+            Err(e) => {
+                log::error!(
+                    "Failed to move project. Operation: {}. Error: {}",
+                    op.describe(),
+                    e
+                );
+                let err_dialog = gtk4::AlertDialog::builder()
+                    .message("Failed to move project")
+                    .detail(&e)
+                    .build();
+                err_dialog.show(Some(parent));
+                return Err(e);
+            }
+        }
+    }
+    Ok(results)
+}
+
+// ── Dialog: initial path entry ─────────────────────────────────────────
+
+fn show_move_rename_dialog(state: &State, old_path: &str) {
+    let main_window = state.borrow().main_window.clone();
+
+    let win = ApplicationWindow::builder()
+        .application(main_window.application().as_ref().unwrap())
+        .title("Move/Rename Project")
+        .modal(true)
+        .transient_for(&main_window)
+        .default_width(500)
+        .build();
+
+    let entry = Entry::builder()
+        .text(old_path)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(12)
+        .build();
+
+    let warning_lbl = Label::builder()
+        .label("")
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(4)
+        .build();
+
+    let error_lbl = Label::builder()
+        .label("")
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(4)
+        .build();
+
+    let ok_btn = Button::with_label("Review Changes…");
+    let cancel_btn = Button::with_label("Cancel");
+
+    let btn_box = GtkBox::new(Orientation::Horizontal, 8);
+    btn_box.set_halign(gtk4::Align::End);
+    btn_box.set_margin_start(12);
+    btn_box.set_margin_end(12);
+    btn_box.set_margin_bottom(12);
+    btn_box.append(&cancel_btn);
+    btn_box.append(&ok_btn);
+
+    let vbox = GtkBox::new(Orientation::Vertical, 0);
+    vbox.append(&entry);
+    vbox.append(&warning_lbl);
+    vbox.append(&error_lbl);
+    vbox.append(&btn_box);
+
+    win.set_child(Some(&vbox));
+
+    // Dynamic validation: check warnings and errors as the user types
+    {
+        let state = state.clone();
+        let warn = warning_lbl.clone();
+        let err = error_lbl.clone();
+        let btn = ok_btn.clone();
+        let old = old_path.to_string();
+        entry.connect_changed(move |entry| {
+            let raw = entry.text().to_string();
+            let trimmed = raw.trim().to_string();
+
+            // Reset
+            warn.set_text("");
+            err.set_text("");
+            btn.set_sensitive(true);
+
+            if trimmed.is_empty() || trimmed == old {
+                return;
+            }
+
+            // Check ignore roots warning
+            let settings = state.borrow().store.get_scan_settings();
+            if path_is_under_any_root(&trimmed, &settings.ignore_roots) {
+                warn.set_text(
+                    "Warning: destination is under an ignored root — the project may be hidden.",
+                );
+            }
+
+            // Check if destination exists and is non-empty or a file
+            let dest = std::path::Path::new(&trimmed);
+            if dest.exists() {
+                if dest.is_file() {
+                    err.set_text("Error: destination is a file, not a directory.");
+                    btn.set_sensitive(false);
+                } else if dest.is_dir() {
+                    if dest.read_dir().map(|mut it| it.next().is_some()).unwrap_or(false) {
+                        err.set_text("Error: destination is a non-empty directory.");
+                        btn.set_sensitive(false);
+                    }
+                }
+            }
+        });
+    }
+
+    // Cancel
+    let win_weak = win.downgrade();
+    cancel_btn.connect_clicked(move |_| {
+        if let Some(w) = win_weak.upgrade() {
+            w.close();
+        }
+    });
+
+    // Review — dry run, then show confirmation
+    let entry_ok = entry.clone();
+    let state_ok = state.clone();
+    let old_path_owned = old_path.to_string();
+    let win_weak2 = win.downgrade();
+    let mw = main_window.clone();
+    ok_btn.connect_clicked(move |_| {
+        let raw = entry_ok.text().to_string();
+        let new_path = raw.trim().to_string();
+        if new_path.is_empty() || new_path == old_path_owned {
+            return;
+        }
+
+        // Dry run: plan operations without performing them
+        let ops = plan_move_operations(&state_ok, &old_path_owned, &new_path);
+        let planned = run_dry_run(&ops);
+
+        // Close the entry dialog
+        if let Some(w) = win_weak2.upgrade() {
+            w.close();
+        }
+
+        // Show confirmation
+        show_move_rename_confirmation(&state_ok, &old_path_owned, &new_path, planned, &mw);
+    });
+
+    win.present();
+}
+
+// ── Dialog: confirmation with planned changes ──────────────────────────
+
+fn show_move_rename_confirmation(
+    state: &State,
+    old_path: &str,
+    new_path: &str,
+    planned: Vec<String>,
+    parent: &gtk4::Window,
+) {
+    let content = if planned.is_empty() {
+        "No changes to make.".to_string()
+    } else {
+        planned.join("\n\n")
+    };
+
+    let buf = gtk4::TextBuffer::new(None);
+    buf.set_text(&content);
+
+    let text_view = TextView::builder()
+        .editable(false)
+        .monospace(true)
+        .hexpand(true)
+        .vexpand(true)
+        .margin_start(8)
+        .margin_end(8)
+        .margin_top(8)
+        .margin_bottom(8)
+        .build();
+    text_view.set_buffer(Some(&buf));
+
+    let scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Automatic)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .hexpand(true)
+        .vexpand(true)
+        .child(&text_view)
+        .build();
+
+    let cancel_btn = Button::with_label("Cancel");
+    let confirm_btn = Button::with_label("Confirm");
+
+    let btn_box = GtkBox::new(Orientation::Horizontal, 8);
+    btn_box.set_halign(gtk4::Align::End);
+    btn_box.set_margin_start(12);
+    btn_box.set_margin_end(12);
+    btn_box.set_margin_bottom(12);
+    btn_box.append(&cancel_btn);
+    btn_box.append(&confirm_btn);
+
+    let vbox = GtkBox::new(Orientation::Vertical, 0);
+    vbox.append(&scroll);
+    vbox.append(&btn_box);
+
+    let win = ApplicationWindow::builder()
+        .application(parent.application().as_ref().unwrap())
+        .title("Move/Rename — Planned Changes")
+        .modal(true)
+        .transient_for(parent)
+        .default_width(500)
+        .default_height(400)
+        .child(&vbox)
+        .build();
+
+    let weak = win.downgrade();
+    cancel_btn.connect_clicked(move |_| {
+        if let Some(w) = weak.upgrade() {
+            w.close();
+        }
+    });
+
+    let win_weak = win.downgrade();
+    let state_c = state.clone();
+    let old_path_c = old_path.to_string();
+    let new_path_c = new_path.to_string();
+    let mw_c = parent.clone();
+    confirm_btn.connect_clicked(move |_| {
+        if let Some(w) = win_weak.upgrade() {
+            w.close();
+        }
+        let ops = plan_move_operations(&state_c, &old_path_c, &new_path_c);
+        match run_execute(&ops, &mw_c) {
+            Ok(results) => {
+                let summary = results.join("\n");
+                let detail = gtk4::AlertDialog::builder()
+                    .message("Project moved successfully")
+                    .detail(&summary)
+                    .build();
+                detail.show(Some(&mw_c));
+            }
+            Err(_) => {} // run_execute already showed an error dialog
+        }
+        // Rescan and refresh
+        let settings = state_c.borrow().store.get_scan_settings();
+        let new_projects = sizzle_core::scan_projects(&settings);
+        {
+            let mut st = state_c.borrow_mut();
+            st.projects = new_projects;
+        }
+        populate_list(&state_c);
+    });
+
+    win.present();
+}
+
+// ── Add to Ignored Roots ─────────────────────────────────────────────────
+
+fn add_to_ignored_roots(state: &State, path: &str) {
+    let mut settings = state.borrow().store.get_scan_settings();
+    if !settings.ignore_roots.contains(&path.to_string()) {
+        settings.ignore_roots.push(path.to_string());
+    }
+    let new_projects = sizzle_core::scan_projects(&settings);
+    {
+        let mut st = state.borrow_mut();
+        st.store.set_scan_settings(&settings);
+        st.projects = new_projects;
+    }
+    populate_list(state);
 }
