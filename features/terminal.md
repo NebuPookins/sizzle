@@ -35,6 +35,10 @@ of the right click.
 Arrow keys should be set to the underlying application so that e.g. `git log -p`
 can be navigated using the up arrow and down arrow keys.
 
+When an application like less (the pager used by git log -p) sets DECCKM (cursor
+key application mode via `\x1b[?1h`), the terminal emulator should send
+`\x1bOA` (SS3 codes) instead.
+
 ### Shift + PageUp/PageDown
 
 I should be able to scroll up and down the terminal history with the mouse wheel
