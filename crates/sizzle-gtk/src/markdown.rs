@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gtk4::gdk::Display;
 use gtk4::prelude::*;
 use gtk4::{ScrolledWindow, TextBuffer, TextTag, TextView, WrapMode};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -22,6 +23,25 @@ impl MarkdownView {
         view.set_bottom_margin(12);
         view.set_left_margin(16);
         view.set_right_margin(16);
+
+        // Dark theme with a scoped CSS class
+        view.add_css_class("sizzle-md-view");
+        if let Some(display) = Display::default() {
+            let provider = gtk4::CssProvider::new();
+            provider.load_from_data(
+                ".sizzle-md-view { background: #1e1e1e; color: #d4d4d4; }
+                 .sizzle-md-view text { background: #1e1e1e; color: #d4d4d4; }
+                 .sizzle-md-view text selection { background: #264f78; }",
+            );
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+
+        view.set_pixels_above_lines(2);
+        view.set_pixels_below_lines(2);
 
         setup_tags(&view.buffer());
 
@@ -109,9 +129,9 @@ fn setup_tags(buf: &TextBuffer) {
         buf.tag_table().add(&tag);
     }
 
-    str_tag(buf, "code_inline", "family",     "Monospace");
-    str_tag(buf, "code_block",  "family",     "Monospace");
-    str_tag(buf, "blockquote",  "foreground", "#888888");
+    multi_str_tag(buf, "code_inline", &[("family", "Monospace"), ("foreground", "#ce9178")]);
+    multi_str_tag(buf, "code_block",  &[("family", "Monospace"), ("foreground", "#d4d4d4"), ("background", "#2d2d2d")]);
+    str_tag(buf, "blockquote",  "foreground", "#b0b0b0");
     str_tag(buf, "link",        "foreground", "#8be9fd");
 }
 
@@ -138,6 +158,14 @@ fn bool_tag(buf: &TextBuffer, name: &str, prop: &str, val: bool) {
 fn str_tag(buf: &TextBuffer, name: &str, prop: &str, val: &str) {
     let tag = TextTag::new(Some(name));
     tag.set_property(prop, val);
+    buf.tag_table().add(&tag);
+}
+
+fn multi_str_tag(buf: &TextBuffer, name: &str, props: &[(&str, &str)]) {
+    let tag = TextTag::new(Some(name));
+    for (prop, val) in props {
+        tag.set_property(prop, val);
+    }
     buf.tag_table().add(&tag);
 }
 
