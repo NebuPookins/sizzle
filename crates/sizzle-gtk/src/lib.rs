@@ -5,6 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,8 +25,14 @@ use sizzle_core::{scan_projects, AgentPreset, MetadataStore, ScanSettings, Scann
 
 struct ProjectWidgets {
     git_view: TextView,
-    agent_terminal: Option<terminal::TerminalWidget>,
-    shell_terminal: Option<terminal::TerminalWidget>,
+    /// All terminal widgets for this project (agent + all shells across all
+    /// tabs).  Used by `populate_list` to determine whether the green dot
+    /// should be drawn — checking [`terminal::TerminalWidget::is_alive`]
+    /// directly eliminates the possibility of counter drift.
+    terminals: Vec<terminal::TerminalWidget>,
+    /// The terminal that was most recently focused, restored when switching
+    /// back to the project.
+    focus_terminal: Option<terminal::TerminalWidget>,
 }
 
 #[derive(Clone)]
@@ -42,7 +49,9 @@ struct ShellTabContext {
     shell_stack: Stack,
     tab_box: GtkBox,
     state: State,
-    pending_exits: Arc<Mutex<Vec<String>>>,
+    /// Signals the 2-second timer to call `populate_list` when a terminal
+    /// exits, so the left-pane green dot updates immediately.
+    repopulate: Arc<AtomicBool>,
     shells: Rc<RefCell<Vec<ShellTab>>>,
     active_shell_id: Rc<Cell<usize>>,
     next_shell_id: Rc<Cell<usize>>,
@@ -55,11 +64,14 @@ struct AppState {
     project_stack: Stack,
     git_stack: Stack,
     list_box: ListBox,
-    active_terminals: HashMap<String, usize>,
-    last_terminal_activity: HashMap<String, Vec<Arc<Mutex<Option<Instant>>>>>,
-    pending_exits: Arc<Mutex<Vec<String>>>,
-    focus_memory: HashMap<String, String>,
+    /// Set to `true` when a terminal's child process exits or is shut down,
+    /// triggering the 2-second timer to call `populate_list` so the left-pane
+    /// dots reflect the new state.  Read-and-reset on every timer tick.
+    repopulate: Arc<AtomicBool>,
     main_window: gtk4::Window,
+    /// DrawingArea widgets for the green/yellow status dots, kept so the
+    /// 2-second timer can redraw them in-place (for the yellow → green
+    /// transition) without recreating the entire list.
     status_dots: Rc<RefCell<Vec<DrawingArea>>>,
 }
 
@@ -240,10 +252,7 @@ fn build_ui(app: &Application) {
         project_stack: project_stack.clone(),
         git_stack: git_stack.clone(),
         list_box: list_box.clone(),
-        active_terminals: HashMap::new(),
-        last_terminal_activity: HashMap::new(),
-        pending_exits: Arc::new(Mutex::new(Vec::new())),
-        focus_memory: HashMap::new(),
+        repopulate: Arc::new(AtomicBool::new(false)),
         main_window: window.clone().upcast(),
         status_dots: Rc::new(RefCell::new(Vec::new())),
     }));
@@ -326,36 +335,29 @@ fn build_ui(app: &Application) {
         });
     }
 
-    let state_for_exits = state.clone();
+    let timer_state = state.clone();
     glib::timeout_add_local(Duration::from_secs(2), move || {
-        // Process exited terminals
+        // Rebuild the left-pane list when a terminal has exited (child died
+        // naturally or was shut down), so the green dot is removed.
+        if timer_state
+            .borrow()
+            .repopulate
+            .swap(false, Ordering::Acquire)
         {
-            let s = state_for_exits.borrow();
-            let exits = std::mem::take(&mut *s.pending_exits.lock().unwrap());
-            if !exits.is_empty() {
-                drop(s);
-                let mut s = state_for_exits.borrow_mut();
-                for path in exits {
-                    if let Some(n) = s.active_terminals.get_mut(&path) {
-                        if *n <= 1 {
-                            s.active_terminals.remove(&path);
-                            s.last_terminal_activity.remove(&path);
-                        } else {
-                            *n -= 1;
-                        }
-                    }
-                }
-                drop(s);
-                populate_list(&state_for_exits);
-            }
+            populate_list(&timer_state);
         }
 
-        // Refresh status dots (yellow/green) while terminals are active — queue
-        // a redraw on each dot DrawingArea in-place rather than recreating all
-        // list rows (which was the source of a severe memory leak).
+        // Refresh status dots (yellow/green) while any terminal is alive —
+        // queue a redraw on each dot DrawingArea in-place rather than
+        // recreating all list rows (which was the source of a severe memory
+        // leak).
         {
-            let s = state_for_exits.borrow();
-            if !s.active_terminals.is_empty() {
+            let s = timer_state.borrow();
+            let has_alive = s
+                .project_widgets
+                .values()
+                .any(|pw| pw.terminals.iter().any(|t| t.is_alive()));
+            if has_alive {
                 let dots = s.status_dots.borrow();
                 for dot in dots.iter() {
                     dot.queue_draw();
@@ -882,6 +884,12 @@ fn format_relative_time(last_ms: i64) -> String {
 fn populate_list(state: &State) {
     use std::cmp::Reverse;
 
+    // Clean up dead terminal references before rebuilding, so the per-project
+    // vec doesn't grow unbounded when tabs are closed or processes exit.
+    for pw in state.borrow_mut().project_widgets.values_mut() {
+        pw.terminals.retain(|t| t.is_alive());
+    }
+
     let st = state.borrow();
     // Clone the Rc so we can mutate the inner vec without needing &mut AppState.
     let dots_rc = st.status_dots.clone();
@@ -923,7 +931,10 @@ fn populate_list(state: &State) {
 
     let mut sorted: Vec<&ScannedProject> = st.projects.iter().collect();
     sorted.sort_by_key(|p| {
-        let is_active = st.active_terminals.contains_key(&p.path);
+        let is_active = st
+            .project_widgets
+            .get(&p.path)
+            .map_or(false, |pw| pw.terminals.iter().any(|t| t.is_alive()));
         let meta = all_meta.get(&p.path);
         let marker_key = marker_sort_key(meta.and_then(|m| m.marker.as_deref()));
         let time_key = Reverse(meta.and_then(|m| m.last_launched));
@@ -1023,44 +1034,43 @@ fn populate_list(state: &State) {
 
         let row_box = GtkBox::new(Orientation::Horizontal, 0);
 
-        // Status dot: yellow if recent terminal activity, green if idle, hidden if inactive.
-        // The draw function captures live Arc refs so queue_draw() gives a fresh color
-        // without recreating the entire list.
-        if st.active_terminals.contains_key(&project.path) {
-            let activity_refs: Vec<Arc<Mutex<Option<Instant>>>> = st
-                .last_terminal_activity
-                .get(&project.path)
-                .cloned()
-                .unwrap_or_default();
+        // Status dot: yellow if recent terminal activity, green if idle, hidden if
+        // no terminals are alive.  The draw function captures live `Arc` refs so
+        // `queue_draw()` gives a fresh colour without recreating the entire list.
+        if let Some(pw) = st.project_widgets.get(&project.path) {
+            if pw.terminals.iter().any(|t| t.is_alive()) {
+                let activity_refs: Vec<Arc<Mutex<Option<Instant>>>> =
+                    pw.terminals.iter().map(|t| t.last_activity()).collect();
 
-            let dot = DrawingArea::new();
-            dot.set_size_request(8, 8);
-            dot.set_valign(gtk4::Align::Center);
-            dot.set_margin_start(8);
-            dot.set_draw_func(move |_, cr, w, h| {
-                let has_recent = activity_refs.iter().any(|a| {
-                    a.lock()
-                        .unwrap()
-                        .map(|t| t.elapsed() < Duration::from_secs(5))
-                        .unwrap_or(false)
+                let dot = DrawingArea::new();
+                dot.set_size_request(8, 8);
+                dot.set_valign(gtk4::Align::Center);
+                dot.set_margin_start(8);
+                dot.set_draw_func(move |_, cr, w, h| {
+                    let has_recent = activity_refs.iter().any(|a| {
+                        a.lock()
+                            .unwrap()
+                            .map(|t| t.elapsed() < Duration::from_secs(5))
+                            .unwrap_or(false)
+                    });
+                    let r = (w.min(h) as f64 / 2.0).min(4.0);
+                    if has_recent {
+                        cr.set_source_rgb(0.95, 0.76, 0.0); // yellow/gold
+                    } else {
+                        cr.set_source_rgb(0.31, 0.98, 0.48); // #50fa7b green
+                    }
+                    cr.arc(
+                        w as f64 / 2.0,
+                        h as f64 / 2.0,
+                        r - 0.5,
+                        0.0,
+                        2.0 * std::f64::consts::PI,
+                    );
+                    cr.fill().ok();
                 });
-                let r = (w.min(h) as f64 / 2.0).min(4.0);
-                if has_recent {
-                    cr.set_source_rgb(0.95, 0.76, 0.0); // yellow/gold
-                } else {
-                    cr.set_source_rgb(0.31, 0.98, 0.48); // #50fa7b green
-                }
-                cr.arc(
-                    w as f64 / 2.0,
-                    h as f64 / 2.0,
-                    r - 0.5,
-                    0.0,
-                    2.0 * std::f64::consts::PI,
-                );
-                cr.fill().ok();
-            });
-            dots_rc.borrow_mut().push(dot.clone());
-            row_box.append(&dot);
+                dots_rc.borrow_mut().push(dot.clone());
+                row_box.append(&dot);
+            }
         }
 
         row_box.append(&info_box);
@@ -1391,15 +1401,18 @@ fn select_project(state: &State, path: &str) {
                 path.clone(),
                 ProjectWidgets {
                     git_view,
-                    agent_terminal: None,
-                    shell_terminal: None,
+                    terminals: Vec::new(),
+                    focus_terminal: None,
                 },
             );
         }
     }
 
-    // Phase 1: immutable borrow to set visible child + read focus memory
-    let focus_key = {
+    // Restore the terminal that was last focused in this project.
+    // Important: clone the terminal out first, then call focus() outside the
+    // borrow, because focus() triggers the focus-in callback which also borrows
+    // state.
+    let terminal = {
         let st = state.borrow();
         st.project_stack.set_visible_child_name(&path);
         st.git_stack.set_visible_child_name(&path);
@@ -1407,25 +1420,12 @@ fn select_project(state: &State, path: &str) {
             update_git_status(&path, &pw.git_view);
         }
         st.store.set_last_launched(&path);
-        st.focus_memory.get(&path).cloned()
+        st.project_widgets
+            .get(&path)
+            .and_then(|pw| pw.focus_terminal.clone())
     };
-
-    // Phase 2: restore focus memory
-    // Important: clone the terminal out first, then call focus() outside the borrow,
-    // because focus() triggers the focus-in callback which also borrows state.
-    if let Some(key) = focus_key {
-        let terminal =
-            state
-                .borrow()
-                .project_widgets
-                .get(&path)
-                .and_then(|pw| match key.as_str() {
-                    "shell" => pw.shell_terminal.clone(),
-                    _ => pw.agent_terminal.clone(),
-                });
-        if let Some(t) = terminal {
-            t.focus();
-        }
+    if let Some(t) = terminal {
+        t.focus();
     }
 }
 
@@ -1793,21 +1793,16 @@ fn launch_terminals(
     state: &State,
 ) {
     let agent = terminal::TerminalWidget::new(Some(path), agent_cmd);
-    let pending_exits = {
-        let mut st = state.borrow_mut();
-        *st.active_terminals.entry(path.to_string()).or_insert(0) += 1;
-        st.last_terminal_activity
-            .entry(path.to_string())
-            .or_default()
-            .push(agent.last_activity());
-        st.pending_exits.clone()
-    };
+    let repopulate = state.borrow().repopulate.clone();
+    // Register the agent terminal so `populate_list` can draw a green dot.
+    if let Some(pw) = state.borrow_mut().project_widgets.get_mut(path) {
+        pw.terminals.push(agent.clone());
+    }
 
     {
-        let pe = pending_exits.clone();
-        let p = path.to_string();
+        let repopulate = repopulate.clone();
         agent.set_on_exit(move || {
-            pe.lock().unwrap().push(p.clone());
+            repopulate.store(true, Ordering::Release);
         });
     }
 
@@ -1864,7 +1859,7 @@ fn launch_terminals(
         shell_stack,
         tab_box: middle_bar,
         state: state.clone(),
-        pending_exits: pending_exits.clone(),
+        repopulate: repopulate.clone(),
         shells: Rc::new(RefCell::new(Vec::new())),
         active_shell_id: Rc::new(Cell::new(0)),
         next_shell_id: Rc::new(Cell::new(1)),
@@ -1877,7 +1872,7 @@ fn launch_terminals(
         });
     }
 
-    let shell = add_shell_tab(&ctx, false);
+    let _shell = add_shell_tab(&ctx, false);
     activate_agent_terminal(&ctx);
 
     // Tab header: label + close button
@@ -1908,10 +1903,9 @@ fn launch_terminals(
 
     agent.focus();
 
-    // Store terminal references for focus memory restoration when switching back.
+    // Store the focused terminal for focus memory restoration when switching back.
     if let Some(pw) = state.borrow_mut().project_widgets.get_mut(path) {
-        pw.agent_terminal = Some(agent);
-        pw.shell_terminal = Some(shell);
+        pw.focus_terminal = Some(agent);
     }
 }
 
@@ -1928,20 +1922,15 @@ fn add_shell_tab(ctx: &ShellTabContext, focus: bool) -> terminal::TerminalWidget
     ctx.shell_stack
         .add_named(&shell.container, Some(&child_name));
 
-    {
-        let mut st = ctx.state.borrow_mut();
-        *st.active_terminals.entry(ctx.path.clone()).or_insert(0) += 1;
-        st.last_terminal_activity
-            .entry(ctx.path.clone())
-            .or_default()
-            .push(shell.last_activity());
+    // Register the shell terminal so `populate_list` can draw a green dot.
+    if let Some(pw) = ctx.state.borrow_mut().project_widgets.get_mut(&ctx.path) {
+        pw.terminals.push(shell.clone());
     }
 
     {
-        let pe = ctx.pending_exits.clone();
-        let p = ctx.path.clone();
+        let repopulate = ctx.repopulate.clone();
         shell.set_on_exit(move || {
-            pe.lock().unwrap().push(p.clone());
+            repopulate.store(true, Ordering::Release);
         });
     }
 
@@ -1984,10 +1973,9 @@ fn activate_agent_terminal(ctx: &ShellTabContext) {
     for shell in ctx.shells.borrow().iter() {
         shell.terminal.set_focused(false);
     }
-    ctx.state
-        .borrow_mut()
-        .focus_memory
-        .insert(ctx.path.clone(), "agent".to_string());
+    if let Some(pw) = ctx.state.borrow_mut().project_widgets.get_mut(&ctx.path) {
+        pw.focus_terminal = Some(ctx.agent.clone());
+    }
 }
 
 fn activate_shell_tab(ctx: &ShellTabContext, shell_id: usize, grab_focus: bool) {
@@ -2008,10 +1996,8 @@ fn activate_shell_tab(ctx: &ShellTabContext, shell_id: usize, grab_focus: bool) 
 
     {
         let mut st = ctx.state.borrow_mut();
-        st.focus_memory
-            .insert(ctx.path.clone(), "shell".to_string());
         if let Some(pw) = st.project_widgets.get_mut(&ctx.path) {
-            pw.shell_terminal = active_terminal.clone();
+            pw.focus_terminal = active_terminal.clone();
         }
     }
 
@@ -2049,7 +2035,7 @@ fn close_shell_tab(ctx: &ShellTabContext, shell_id: usize, refocus: bool) -> boo
 
     ctx.shell_stack.remove(&removed.terminal.container);
     removed.terminal.shutdown();
-    ctx.pending_exits.lock().unwrap().push(ctx.path.clone());
+    ctx.repopulate.store(true, Ordering::Release);
 
     if was_active {
         if let Some(next_id) = next_active_id {
@@ -2133,12 +2119,13 @@ fn refresh_shell_tab_bar(ctx: &ShellTabContext) {
 
 fn shutdown_terminal_tab(ctx: &ShellTabContext) {
     ctx.agent.shutdown();
-    ctx.pending_exits.lock().unwrap().push(ctx.path.clone());
+    // Agent set_on_exit already sets repopulate; the explicit signal here
+    // covers the case where shutdown() doesn't trigger a ChildExit event.
+    ctx.repopulate.store(true, Ordering::Release);
 
     let shells = ctx.shells.borrow().clone();
     for shell in shells {
         shell.terminal.shutdown();
-        ctx.pending_exits.lock().unwrap().push(ctx.path.clone());
     }
 }
 

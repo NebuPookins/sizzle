@@ -103,6 +103,7 @@ pub struct TerminalWidget {
     last_activity: Arc<Mutex<Option<Instant>>>,
     focused: Arc<AtomicBool>,
     timer_stopped: Arc<AtomicBool>,
+    alive: Arc<AtomicBool>,
 }
 
 impl TerminalWidget {
@@ -184,6 +185,7 @@ impl TerminalWidget {
             last_activity,
             focused: Arc::new(AtomicBool::new(false)),
             timer_stopped: Arc::new(AtomicBool::new(false)),
+            alive: Arc::new(AtomicBool::new(true)),
         };
         widget.setup_draw();
         widget.setup_keyboard();
@@ -588,14 +590,27 @@ impl TerminalWidget {
 
     pub fn shutdown(&self) {
         self.timer_stopped.store(true, Ordering::Release);
+        self.alive.store(false, Ordering::Release);
         let _ = self.sender.send(Msg::Shutdown);
     }
 
     /// Register a callback that fires (on the alacritty event-loop thread)
-    /// when the child process exits. Use `glib::idle_add` to dispatch to the
-    /// GTK main thread from within the callback.
+    /// when the child process exits.  Wraps the callback so the terminal is
+    /// marked dead before the caller's callback runs, and the callback is
+    /// consumed (`.take()`) so it fires at most once — preventing duplicate
+    /// exit reports regardless of how many paths trigger it.
     pub fn set_on_exit<F: Fn() + Send + 'static>(&self, cb: F) {
-        *self.on_exit.lock().unwrap() = Some(Box::new(cb));
+        let alive = self.alive.clone();
+        *self.on_exit.lock().unwrap() = Some(Box::new(move || {
+            alive.store(false, Ordering::Release);
+            cb();
+        }));
+    }
+
+    /// Returns `true` while the child process is (presumably) still running.
+    /// Once the child exits or [`shutdown`] is called this returns `false`.
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
     }
 
     /// Returns a shared reference to the timestamp of the last PTY output.
