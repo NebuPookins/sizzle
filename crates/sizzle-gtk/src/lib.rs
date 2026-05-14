@@ -127,14 +127,15 @@ fn build_ui(app: &Application) {
 
     let search = Entry::builder()
         .placeholder_text("Search projects…")
-        .margin_start(6)
-        .margin_end(6)
-        .margin_top(6)
-        .margin_bottom(4)
         .build();
+
+    let search_box = GtkBox::new(Orientation::Horizontal, 0);
+    search_box.add_css_class("app-sidebar-search");
+    search_box.append(&search);
 
     let list_box = ListBox::new();
     list_box.set_selection_mode(gtk4::SelectionMode::Single);
+    list_box.add_css_class("project-list");
 
     let scroll = ScrolledWindow::builder()
         .hscrollbar_policy(gtk4::PolicyType::Never)
@@ -144,11 +145,10 @@ fn build_ui(app: &Application) {
     scroll.set_child(Some(&list_box));
 
     // ── Settings button opens a modal window ─────────────────────────────────
-    let settings_btn = Button::with_label("⚙ Settings");
+    let settings_btn = Button::with_label("Settings");
     settings_btn.set_has_frame(false);
-    settings_btn.set_margin_start(6);
-    settings_btn.set_margin_top(4);
-    settings_btn.set_margin_bottom(6);
+    settings_btn.set_hexpand(true);
+    settings_btn.add_css_class("settings-btn");
 
     let btn_row = GtkBox::new(Orientation::Horizontal, 0);
     btn_row.append(&settings_btn);
@@ -157,26 +157,18 @@ fn build_ui(app: &Application) {
     let mem_total_lbl = Label::builder()
         .label("Memory: –")
         .halign(gtk4::Align::Start)
-        .margin_start(8)
-        .margin_end(8)
-        .margin_top(2)
         .build();
-    mem_total_lbl.add_css_class("caption");
+    mem_total_lbl.add_css_class("mem-value");
     let mem_app_lbl = Label::builder()
         .label("")
         .halign(gtk4::Align::Start)
-        .margin_start(8)
-        .margin_end(8)
         .build();
-    mem_app_lbl.add_css_class("caption");
+    mem_app_lbl.add_css_class("mem-sublabel");
     let mem_agent_lbl = Label::builder()
         .label("")
         .halign(gtk4::Align::Start)
-        .margin_start(8)
-        .margin_end(8)
-        .margin_bottom(4)
         .build();
-    mem_agent_lbl.add_css_class("caption");
+    mem_agent_lbl.add_css_class("mem-sublabel");
     let mem_vbox = GtkBox::new(Orientation::Vertical, 0);
     mem_vbox.append(&mem_total_lbl);
     mem_vbox.append(&mem_app_lbl);
@@ -190,11 +182,16 @@ fn build_ui(app: &Application) {
     mem_sep.set_visible(false);
 
     let left = GtkBox::new(Orientation::Vertical, 0);
-    left.append(&search);
+    left.add_css_class("app-sidebar");
+    left.append(&search_box);
     left.append(&scroll);
-    left.append(&btn_row);
-    left.append(&mem_sep);
-    left.append(&mem_vbox);
+
+    let sidebar_footer = GtkBox::new(Orientation::Vertical, 0);
+    sidebar_footer.add_css_class("app-sidebar-footer");
+    sidebar_footer.append(&btn_row);
+    sidebar_footer.append(&mem_sep);
+    sidebar_footer.append(&mem_vbox);
+    left.append(&sidebar_footer);
     left.set_size_request(10, -1);
 
     let project_stack = Stack::builder()
@@ -221,7 +218,7 @@ fn build_ui(app: &Application) {
     let outer_paned = Paned::new(Orientation::Horizontal);
     outer_paned.set_start_child(Some(&left));
     outer_paned.set_end_child(Some(&inner_paned));
-    outer_paned.set_position(260);
+    outer_paned.set_position(240);
     outer_paned.set_shrink_start_child(true);
     outer_paned.set_shrink_end_child(false);
 
@@ -275,16 +272,19 @@ fn build_ui(app: &Application) {
                                 .first()
                                 .map(|t| t.name.as_str())
                                 .unwrap_or("");
-                            let label = if tag.is_empty() {
-                                p.name.clone()
+                            let in_name = if case_sensitive {
+                                p.name.contains(query.as_str())
                             } else {
-                                format!("{} [{}]", p.name, tag)
+                                p.name.to_lowercase().contains(&query_lower as &str)
                             };
-                            if case_sensitive {
-                                label.contains(query.as_str())
-                            } else {
-                                label.to_lowercase().contains(&query_lower as &str)
-                            }
+                            let in_tag = !tag.is_empty() && (
+                                if case_sensitive {
+                                    tag.contains(query.as_str())
+                                } else {
+                                    tag.to_lowercase().contains(&query_lower as &str)
+                                }
+                            );
+                            in_name || in_tag
                         })
                 };
                 row.set_visible(visible);
@@ -386,45 +386,451 @@ fn build_ui(app: &Application) {
         });
     }
 
-    // ── Dark background for the git status pane ──────────────────────────
+    // ── Full dark theme CSS ──────────────────────────────────────────────
     let css_provider = CssProvider::new();
     css_provider.load_from_data(
-        ".git-pane { background: #1e1e2e; }
-         .git-pane textview text { background: #1e1e2e; color: #cdd6f4; }
-         .git-pane label { color: #cdd6f4; }
-         .terminal-middle-bar {
-             background: #20242b;
-             border-top: 1px solid #3a404b;
-             border-bottom: 1px solid #101216;
-             padding: 2px 6px;
-             min-height: 30px;
+        "window {
+             background-color: #0d0b14;
+             color: #ede8f8;
          }
-         .terminal-grip { color: #8b949e; padding: 0 6px; }
+         headerbar {
+             background-color: #1d1933;
+             border-bottom: 1px solid #2e2952;
+             color: #ede8f8;
+             min-height: 38px;
+             padding: 0 8px;
+             box-shadow: none;
+         }
+         .app-sidebar {
+             background-color: #100d1c;
+         }
+         .app-sidebar-search {
+             padding: 8px 10px;
+             border-bottom: 1px solid #2e2952;
+             background-color: #100d1c;
+         }
+         .app-sidebar-search entry {
+             background-color: #1d1933;
+             border: 1px solid #2e2952;
+             border-radius: 6px;
+             color: #ede8f8;
+             min-height: 30px;
+             padding: 4px 8px;
+             caret-color: #ede8f8;
+         }
+         .app-sidebar-search entry:focus {
+             border-color: #ff5533;
+         }
+         entry placeholder {
+             color: #514b6f;
+         }
+         .project-list {
+             background-color: #100d1c;
+         }
+         .project-list > row {
+             background-color: transparent;
+             border-left: 2px solid transparent;
+             padding: 0;
+             border-radius: 0;
+         }
+         .project-list > row:hover {
+             background-color: #231e3e;
+         }
+         .project-list > row:selected,
+         .project-list > row:active {
+             background-color: #2c2554;
+             border-left: 2px solid #ff5533;
+             color: #ede8f8;
+         }
+         .project-list > row:selected * {
+             color: inherit;
+         }
+         .project-name {
+             font-size: 13px;
+             font-weight: 500;
+             color: #ede8f8;
+         }
+         .project-time {
+             font-size: 11px;
+             color: #514b6f;
+         }
+         .project-time-running {
+             font-size: 11px;
+             color: #00ccee;
+         }
+         .project-tag {
+             font-size: 9px;
+             font-weight: 700;
+             color: #514b6f;
+             background-color: #2e2952;
+             border-radius: 3px;
+             padding: 1px 5px;
+         }
+         .project-ignored {
+             opacity: 0.35;
+         }
+         .app-sidebar-footer {
+             border-top: 1px solid #2e2952;
+             background-color: #100d1c;
+             padding: 10px 12px;
+         }
+         .mem-value {
+             font-size: 11px;
+             color: #9088b8;
+             font-family: \"JetBrains Mono\", Monospace;
+         }
+         .mem-sublabel {
+             font-size: 10px;
+             color: #514b6f;
+         }
+         button.settings-btn {
+             background-color: #1d1933;
+             border: 1px solid #2e2952;
+             border-radius: 6px;
+             color: #9088b8;
+             font-size: 12px;
+             padding: 5px 10px;
+             margin-top: 4px;
+         }
+         button.settings-btn:hover {
+             background-color: #231e3e;
+             color: #ede8f8;
+         }
+         .launch-toolbar {
+             background-color: #1d1933;
+             border-bottom: 1px solid #2e2952;
+             padding: 0 12px;
+             min-height: 38px;
+         }
+         button.launch-btn {
+             background-color: #231e3e;
+             border: 1px solid #2e2952;
+             border-radius: 5px;
+             color: #9088b8;
+             font-size: 12px;
+             font-weight: 500;
+             padding: 4px 12px;
+             margin: 0 3px;
+         }
+         button.launch-btn:hover {
+             background-color: #2c2554;
+             color: #ede8f8;
+         }
+         button.launch-claude {
+             background-color: #2c2554;
+             color: #a6e3a1;
+             border-color: rgba(255,85,51,0.3);
+         }
+         button.launch-codex {
+             color: #89dceb;
+         }
+         notebook > header {
+             background-color: #100d1c;
+             border-bottom: 1px solid #2e2952;
+             padding: 0;
+             min-height: 35px;
+         }
+         notebook > header > tabs {
+             margin: 0;
+             padding: 0;
+         }
+         notebook > header > tabs > tab {
+             background-color: transparent;
+             color: #514b6f;
+             font-size: 12px;
+             padding: 0 14px;
+             border-right: 1px solid #2e2952;
+             border-bottom: 2px solid transparent;
+             min-height: 35px;
+             margin: 0;
+             border-radius: 0;
+         }
+         notebook > header > tabs > tab:checked {
+             background-color: #14112a;
+             color: #ede8f8;
+             font-weight: 500;
+             border-bottom: 2px solid #ff5533;
+         }
+         notebook > header > tabs > tab:hover:not(:checked) {
+             background-color: #1d1933;
+             color: #9088b8;
+         }
+         notebook > header > tabs > tab:checked reorder-placeholder {
+             background-color: transparent;
+         }
+         notebook > header.top > tabs > tab {
+             box-shadow: none;
+         }
+         .content-area {
+             background-color: #14112a;
+         }
+         .git-pane {
+             background-color: #100d1c;
+             border-left: 1px solid #2e2952;
+         }
+         .git-pane-header {
+             background-color: #1d1933;
+             border-bottom: 1px solid #2e2952;
+             min-height: 36px;
+             padding: 0 14px;
+         }
+         .git-pane-header-label {
+             font-size: 10px;
+             font-weight: 700;
+             letter-spacing: 1px;
+             color: #514b6f;
+         }
+         .git-pane textview {
+             background-color: #100d1c;
+             color: #9088b8;
+             font-family: \"JetBrains Mono\", Monospace;
+             font-size: 11px;
+             padding: 12px;
+         }
+         .git-pane textview text {
+             background-color: #100d1c;
+         }
+         .git-modified  { color: #f5a62a; }
+         .git-branch    { color: #00ccee; }
+         .git-untracked { color: #514b6f; }
+         .terminal-area {
+             background-color: #08070d;
+         }
+         .terminal-middle-bar {
+             background-color: #1d1933;
+             border-top: 1px solid #2e2952;
+             border-bottom: 1px solid #2e2952;
+             padding: 0 10px;
+             min-height: 33px;
+         }
+         .terminal-grip {
+             color: #514b6f;
+             padding: 0 4px;
+             opacity: 0.5;
+         }
          button.shell-tab {
+             background-color: transparent;
+             border: none;
              border-radius: 4px;
-             padding: 2px 8px;
-             background: transparent;
-             color: #c9d1d9;
+             color: #9088b8;
+             font-size: 11px;
+             font-weight: 500;
+             padding: 2px 10px;
+             min-height: 22px;
          }
          button.shell-tab-active {
-             background: #3a404b;
-             color: #ffffff;
+             background-color: #2c2554;
+             color: #ede8f8;
+         }
+         button.shell-tab:hover:not(.shell-tab-active) {
+             background-color: #231e3e;
          }
          button.shell-tab-close {
              min-width: 18px;
              min-height: 18px;
              padding: 0;
+             border-radius: 3px;
+             background-color: transparent;
+             color: #514b6f;
+             font-size: 10px;
+             border: none;
+         }
+         button.shell-tab-close:hover {
+             background-color: #231e3e;
+             color: #ede8f8;
+         }
+         button.shell-tab-add {
+             background-color: transparent;
+             border: 1px solid #2e2952;
+             border-radius: 4px;
+             color: #514b6f;
+             min-width: 22px;
+             min-height: 22px;
+             padding: 0;
+             font-size: 14px;
+             border-style: dashed;
+         }
+         button.shell-tab-add:hover {
+             background-color: #231e3e;
+             color: #9088b8;
          }
          popover {
-             background: #2a2e38;
-             border: 1px solid #3a404b;
+             background-color: #1d1933;
+             border: 1px solid #2e2952;
              border-radius: 6px;
          }
-         popover label, popover button {
-             color: #cdd6f4;
+         popover > contents {
+             background-color: #1d1933;
+             border-radius: 6px;
+             padding: 4px;
+         }
+         popover label {
+             color: #9088b8;
+         }
+         popover button {
+             background-color: transparent;
+             color: #9088b8;
+             font-size: 12px;
+             padding: 5px 10px;
+             border-radius: 4px;
+             border: none;
          }
          popover button:hover {
-             background: #3a404b;
+             background-color: #231e3e;
+             color: #ede8f8;
+         }
+         scrollbar {
+             background-color: transparent;
+             border: none;
+             padding: 0;
+         }
+         scrollbar.vertical {
+             margin-left: 1px;
+         }
+         scrollbar slider {
+             background-color: rgba(255,255,255,0.08);
+             border-radius: 3px;
+             min-width: 5px;
+             min-height: 20px;
+             border: none;
+         }
+         scrollbar slider:hover {
+             background-color: rgba(255,255,255,0.15);
+         }
+         scrollbar trough {
+             background-color: transparent;
+             border: none;
+         }
+         separator {
+             background-color: #2e2952;
+             min-height: 1px;
+             min-width: 1px;
+         }
+         .caption {
+             font-size: 11px;
+             color: #514b6f;
+         }
+         .markdown-view, .markdown-view text {
+             background-color: #14112a;
+             color: #ede8f8;
+             font-size: 13px;
+         }
+         .markdown-edit-btn {
+             background-color: #1d1933;
+             border: 1px solid #2e2952;
+             border-radius: 5px;
+             color: #9088b8;
+             font-size: 12px;
+             padding: 4px 14px;
+         }
+         .markdown-edit-btn:hover {
+             background-color: #231e3e;
+             color: #ede8f8;
+         }
+         .explorer-file-list {
+             background-color: #100d1c;
+             border-right: 1px solid #2e2952;
+         }
+         .explorer-file-list row {
+             background-color: transparent;
+             padding: 3px 10px;
+             font-size: 12px;
+             color: #ede8f8;
+             font-family: \"JetBrains Mono\", Monospace;
+         }
+         .explorer-file-list row:hover {
+             background-color: #231e3e;
+         }
+         .explorer-file-list row:selected {
+             background-color: #2c2554;
+             color: #ede8f8;
+         }
+         .explorer-dir-row {
+             color: #9088b8;
+             font-family: Cantarell, sans-serif;
+         }
+         .explorer-path-label {
+             font-size: 11px;
+             color: #514b6f;
+             font-family: \"JetBrains Mono\", Monospace;
+             padding: 8px 14px 4px;
+         }
+         .explorer-content textview {
+             background-color: #14112a;
+             color: #cdd6f4;
+             font-family: \"JetBrains Mono\", Monospace;
+             font-size: 11px;
+             padding: 16px 20px;
+         }
+         .explorer-content textview text {
+             background-color: #14112a;
+         }
+         dialog {
+             background-color: #1d1933;
+             color: #ede8f8;
+         }
+         dialog entry {
+             background-color: #14112a;
+             border: 1px solid #2e2952;
+             border-radius: 5px;
+             color: #ede8f8;
+             padding: 6px 10px;
+             caret-color: #ede8f8;
+         }
+         dialog button {
+             background-color: #231e3e;
+             border: 1px solid #2e2952;
+             border-radius: 5px;
+             color: #9088b8;
+             padding: 6px 16px;
+         }
+         dialog button:hover {
+             background-color: #2c2554;
+             color: #ede8f8;
+         }
+         dialog button.suggested-action {
+             background-color: #ff5533;
+             border-color: #ff5533;
+             color: #ffffff;
+             font-weight: 600;
+         }
+         dialog button.suggested-action:hover {
+             background-color: #e04420;
+         }
+         /* ── Root containers — kill grey ──────────────────────────── */
+         paned {
+             background-color: #0d0b14;
+             background: #0d0b14;
+         }
+         paned separator {
+             background-color: #2e2952;
+             min-width: 1px;
+             min-height: 1px;
+         }
+         stack {
+             background: transparent;
+         }
+         notebook {
+             background: transparent;
+         }
+         notebook stack {
+             background: transparent;
+         }
+         scrolledwindow {
+             background-color: transparent;
+             border: none;
+         }
+         scrolledwindow viewport {
+             background: transparent;
+         }
+         .app-sidebar box {
+             background: transparent;
+         }
+         .content-area scrolledwindow {
+             background-color: transparent;
+         }
+         .content-area stack {
+             background: transparent;
          }",
     );
     if let Some(display) = gdk::Display::default() {
@@ -480,7 +886,7 @@ fn populate_list(state: &State) {
         // not appear in the first_child chain in all GTK4 versions.
         if let Some(first) = row.first_child() {
             let mut c = Some(first.clone());
-            let mut last = row.last_child();
+            let last = row.last_child();
             while let Some(child) = c {
                 c = child.next_sibling();
                 if child.is::<Popover>() {
@@ -527,11 +933,8 @@ fn populate_list(state: &State) {
             .first()
             .map(|t| t.name.as_str())
             .unwrap_or("");
-        let name_text = if tag.is_empty() {
-            project.name.clone()
-        } else {
-            format!("{} [{}]", project.name, tag)
-        };
+
+        let is_running = st.active_terminals.contains_key(&project.path);
 
         let last_active = all_meta
             .get(&project.path)
@@ -540,33 +943,60 @@ fn populate_list(state: &State) {
             .unwrap_or_else(|| "never".to_string());
 
         let name_lbl = Label::builder()
-            .label(&name_text)
+            .label(&project.name)
             .halign(gtk4::Align::Start)
-            .margin_start(8)
-            .margin_top(4)
-            .margin_bottom(0)
             .ellipsize(pango::EllipsizeMode::End)
             .single_line_mode(true)
             .build();
+        name_lbl.add_css_class("project-name");
 
+        let name_row = GtkBox::new(Orientation::Horizontal, 6);
+
+        // Favorite star indicator (visual only, not the toggle button)
+        if marker == "favorite" {
+            let star_lbl = Label::new(Some("★"));
+            star_lbl.set_margin_start(14);
+            name_row.append(&star_lbl);
+            name_lbl.set_margin_start(0);
+        } else {
+            name_lbl.set_margin_start(14);
+        }
+        name_row.append(&name_lbl);
+
+        // Tag badge
+        if !tag.is_empty() {
+            let tag_lbl = Label::builder()
+                .label(&tag.to_uppercase())
+                .build();
+            tag_lbl.add_css_class("project-tag");
+            name_row.append(&tag_lbl);
+        }
+
+        let last_display = if is_running {
+            "claude · running".to_string()
+        } else {
+            last_active
+        };
         let time_lbl = Label::builder()
-            .label(&last_active)
+            .label(&last_display)
             .halign(gtk4::Align::Start)
-            .margin_start(8)
-            .margin_top(0)
-            .margin_bottom(4)
+            .margin_start(14)
             .ellipsize(pango::EllipsizeMode::End)
             .single_line_mode(true)
             .build();
-        time_lbl.add_css_class("caption");
+        if is_running {
+            time_lbl.add_css_class("project-time-running");
+        } else {
+            time_lbl.add_css_class("project-time");
+        }
 
-        let info_box = GtkBox::new(Orientation::Vertical, 0);
+        let info_box = GtkBox::new(Orientation::Vertical, 2);
         info_box.set_hexpand(true);
-        info_box.append(&name_lbl);
+        info_box.append(&name_row);
         info_box.append(&time_lbl);
 
         if is_ignored {
-            info_box.set_opacity(0.45);
+            info_box.add_css_class("project-ignored");
         }
 
         let (icon, tooltip, marker_opacity) = match marker {
@@ -769,9 +1199,7 @@ fn select_project(state: &State, path: &str) {
                 // ── Toolbar: Edit / Save / Cancel buttons ─────────────────
                 let edit_btn = Button::with_label("Edit");
                 edit_btn.set_has_frame(false);
-                edit_btn.set_margin_start(4);
-                edit_btn.set_margin_top(4);
-                edit_btn.set_margin_bottom(4);
+                edit_btn.add_css_class("markdown-edit-btn");
 
                 let save_btn = Button::with_label("Save");
                 save_btn.set_has_frame(false);
@@ -851,9 +1279,14 @@ fn select_project(state: &State, path: &str) {
             btn_box.set_margin_bottom(4);
             btn_box.set_halign(gtk4::Align::End);
 
-            let claude_btn = Button::with_label("Launch Claude");
-            let codex_btn = Button::with_label("Launch Codex");
-            let shell_btn = Button::with_label("Shell");
+            let claude_btn = Button::with_label("◉ Claude");
+            claude_btn.add_css_class("launch-btn");
+            claude_btn.add_css_class("launch-claude");
+            let codex_btn = Button::with_label("⬡ Codex");
+            codex_btn.add_css_class("launch-btn");
+            codex_btn.add_css_class("launch-codex");
+            let shell_btn = Button::with_label("$ Shell");
+            shell_btn.add_css_class("launch-btn");
             btn_box.append(&claude_btn);
             btn_box.append(&codex_btn);
             btn_box.append(&shell_btn);
@@ -870,6 +1303,7 @@ fn select_project(state: &State, path: &str) {
             spacer.set_hexpand(true);
 
             let top_bar = GtkBox::new(Orientation::Horizontal, 0);
+            top_bar.add_css_class("launch-toolbar");
             top_bar.append(&spacer);
             top_bar.append(&btn_box);
 
@@ -888,19 +1322,21 @@ fn select_project(state: &State, path: &str) {
             let git_container = GtkBox::new(Orientation::Vertical, 0);
             git_container.add_css_class("git-pane");
             let git_header = Label::builder()
-                .label("Git Status")
+                .label("GIT STATUS")
                 .halign(gtk4::Align::Start)
-                .margin_start(8)
-                .margin_top(6)
-                .margin_bottom(2)
                 .build();
-            git_header.add_css_class("git-pane");
-            git_container.append(&git_header);
+            git_header.add_css_class("git-pane-header-label");
+            let git_header_box = GtkBox::new(Orientation::Horizontal, 0);
+            git_header_box.set_valign(gtk4::Align::Center);
+            git_header_box.add_css_class("git-pane-header");
+            git_header_box.append(&git_header);
+            git_container.append(&git_header_box);
             git_container.append(&git_scroll);
 
             st.git_stack.add_named(&git_container, Some(&path));
 
             let project_box = GtkBox::new(Orientation::Vertical, 0);
+            project_box.add_css_class("content-area");
             project_box.append(&top_bar);
             project_box.append(&notebook);
 
@@ -1005,6 +1441,7 @@ fn build_explorer_tab(project_root: &str) -> Paned {
         .margin_bottom(4)
         .build();
 
+    path_lbl.add_css_class("explorer-path-label");
     let nav_bar = GtkBox::new(Orientation::Horizontal, 0);
     nav_bar.append(&back_btn);
     nav_bar.append(&path_lbl);
@@ -1019,10 +1456,11 @@ fn build_explorer_tab(project_root: &str) -> Paned {
         .build();
     list_scroll.set_child(Some(&file_list));
 
-    let left = GtkBox::new(Orientation::Vertical, 0);
-    left.append(&nav_bar);
-    left.append(&list_scroll);
-    left.set_size_request(10, -1);
+    let explorer_left = GtkBox::new(Orientation::Vertical, 0);
+    explorer_left.add_css_class("explorer-file-list");
+    explorer_left.append(&nav_bar);
+    explorer_left.append(&list_scroll);
+    explorer_left.set_size_request(10, -1);
 
     // ── Right: content viewer ──────────────────────────────────────────────
     let content_stack = Stack::new();
@@ -1065,9 +1503,7 @@ fn build_explorer_tab(project_root: &str) -> Paned {
     // ── Explorer toolbar for markdown editing ──────────────────────────
     let md_edit_btn = Button::with_label("Edit");
     md_edit_btn.set_has_frame(false);
-    md_edit_btn.set_margin_start(4);
-    md_edit_btn.set_margin_top(4);
-    md_edit_btn.set_margin_bottom(4);
+    md_edit_btn.add_css_class("markdown-edit-btn");
     let md_save_btn = Button::with_label("Save");
     md_save_btn.set_has_frame(false);
     md_save_btn.set_visible(false);
@@ -1151,10 +1587,14 @@ fn build_explorer_tab(project_root: &str) -> Paned {
 
     content_stack.set_visible_child_name("placeholder");
 
+    let explorer_content = GtkBox::new(Orientation::Vertical, 0);
+    explorer_content.add_css_class("explorer-content");
+    explorer_content.append(&content_stack);
+
     // ── Paned ──────────────────────────────────────────────────────────────
     let paned = Paned::new(Orientation::Horizontal);
-    paned.set_start_child(Some(&left));
-    paned.set_end_child(Some(&content_stack));
+    paned.set_start_child(Some(&explorer_left));
+    paned.set_end_child(Some(&explorer_content));
     paned.set_position(240);
     paned.set_shrink_start_child(false);
     paned.set_shrink_end_child(false);
@@ -1267,6 +1707,9 @@ fn explorer_load_dir(
         let row = ListBoxRow::new();
         row.set_child(Some(&lbl));
         row.set_widget_name(&entry.path);
+        if entry.is_directory {
+            row.add_css_class("explorer-dir-row");
+        }
         file_list.append(&row);
     }
 }
@@ -1369,6 +1812,7 @@ fn launch_terminals(
     let bottom = GtkBox::new(Orientation::Vertical, 0);
     bottom.set_hexpand(true);
     bottom.set_vexpand(true);
+    bottom.add_css_class("terminal-area");
     bottom.append(&middle_bar);
     bottom.append(&shell_stack);
 
@@ -1610,11 +2054,6 @@ fn refresh_shell_tab_bar(ctx: &ShellTabContext) {
         ctx.tab_box.remove(&child);
     }
 
-    let grip = Label::new(Some("|||"));
-    grip.add_css_class("terminal-grip");
-    grip.set_tooltip_text(Some("Drag to resize terminals"));
-    ctx.tab_box.append(&grip);
-
     let shells = ctx.shells.borrow().clone();
     let shell_count = shells.len();
     let active_id = ctx.active_shell_id.get();
@@ -1655,16 +2094,13 @@ fn refresh_shell_tab_bar(ctx: &ShellTabContext) {
         }
     }
 
-    let spacer = GtkBox::new(Orientation::Horizontal, 0);
-    spacer.set_hexpand(true);
-    ctx.tab_box.append(&spacer);
-
     let add_btn = Button::builder()
-        .icon_name("list-add-symbolic")
+        .label("+")
         .has_frame(false)
         .focus_on_click(false)
         .tooltip_text("New shell")
         .build();
+    add_btn.add_css_class("shell-tab-add");
     {
         let ctx = ctx.clone();
         add_btn.connect_clicked(move |_| {
@@ -1672,6 +2108,15 @@ fn refresh_shell_tab_bar(ctx: &ShellTabContext) {
         });
     }
     ctx.tab_box.append(&add_btn);
+
+    let spacer = GtkBox::new(Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    ctx.tab_box.append(&spacer);
+
+    let grip = Label::new(Some("⋮⋮"));
+    grip.add_css_class("terminal-grip");
+    grip.set_tooltip_text(Some("Drag to resize terminals"));
+    ctx.tab_box.append(&grip);
 }
 
 fn shutdown_terminal_tab(ctx: &ShellTabContext) {
