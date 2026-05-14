@@ -302,7 +302,11 @@ impl TerminalWidget {
                 }
             }
 
-            let bytes = key_to_bytes(kv, mods);
+            let bytes = {
+                let t = term.lock();
+                let mode = *t.mode();
+                key_to_bytes(kv, mods, mode)
+            };
             if !bytes.is_empty() {
                 let _ = sender.send(Msg::Input(bytes.into()));
             }
@@ -901,7 +905,7 @@ fn idx_fb(idx: u8) -> (f64, f64, f64) {
     }
 }
 
-pub fn key_to_bytes(kv: gdk::Key, mods: gdk::ModifierType) -> Vec<u8> {
+pub fn key_to_bytes(kv: gdk::Key, mods: gdk::ModifierType, mode: TermMode) -> Vec<u8> {
     let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
     let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
 
@@ -932,10 +936,34 @@ pub fn key_to_bytes(kv: gdk::Key, mods: gdk::ModifierType) -> Vec<u8> {
             }
         }
         gdk::Key::Escape => vec![0x1b],
-        gdk::Key::Up => b"\x1b[A".to_vec(),
-        gdk::Key::Down => b"\x1b[B".to_vec(),
-        gdk::Key::Right => b"\x1b[C".to_vec(),
-        gdk::Key::Left => b"\x1b[D".to_vec(),
+        gdk::Key::Up => {
+            if mode.contains(TermMode::APP_CURSOR) {
+                b"\x1bOA".to_vec()
+            } else {
+                b"\x1b[A".to_vec()
+            }
+        }
+        gdk::Key::Down => {
+            if mode.contains(TermMode::APP_CURSOR) {
+                b"\x1bOB".to_vec()
+            } else {
+                b"\x1b[B".to_vec()
+            }
+        }
+        gdk::Key::Right => {
+            if mode.contains(TermMode::APP_CURSOR) {
+                b"\x1bOC".to_vec()
+            } else {
+                b"\x1b[C".to_vec()
+            }
+        }
+        gdk::Key::Left => {
+            if mode.contains(TermMode::APP_CURSOR) {
+                b"\x1bOD".to_vec()
+            } else {
+                b"\x1b[D".to_vec()
+            }
+        }
         gdk::Key::Home => b"\x1b[H".to_vec(),
         gdk::Key::End => b"\x1b[F".to_vec(),
         gdk::Key::Page_Up => b"\x1b[5~".to_vec(),
