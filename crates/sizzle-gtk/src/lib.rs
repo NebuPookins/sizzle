@@ -748,6 +748,9 @@ fn build_ui(app: &Application) {
              background-color: #100d1c;
              border-right: 1px solid #2e2952;
          }
+         .explorer-file-list listbox {
+             background: transparent;
+         }
          .explorer-file-list row {
              background-color: transparent;
              padding: 3px 10px;
@@ -1471,6 +1474,8 @@ fn build_explorer_tab(project_root: &str) -> Paned {
         .vscrollbar_policy(gtk4::PolicyType::Automatic)
         .vexpand(true)
         .build();
+    list_scroll.add_css_class("explorer-file-list");
+    file_list.add_css_class("explorer-file-list");
     list_scroll.set_child(Some(&file_list));
 
     let explorer_left = GtkBox::new(Orientation::Vertical, 0);
