@@ -477,6 +477,15 @@ fn build_ui(app: &Application) {
          .project-ignored {
              opacity: 0.35;
          }
+         .marker-favorite {
+             color: #ffd700;
+         }
+         .marker-ignored {
+             color: #ff4444;
+         }
+         .marker-neutral {
+             color: #514b6f;
+         }
          .app-sidebar-footer {
              border-top: 1px solid #2e2952;
              background-color: #100d1c;
@@ -955,7 +964,10 @@ fn populate_list(state: &State) {
             .map(|t| t.name.as_str())
             .unwrap_or("");
 
-        let is_running = st.active_terminals.contains_key(&project.path);
+        let is_running = st
+            .project_widgets
+            .get(&project.path)
+            .map_or(false, |pw| pw.terminals.iter().any(|t| t.is_alive()));
 
         let last_active = all_meta
             .get(&project.path)
@@ -973,15 +985,7 @@ fn populate_list(state: &State) {
 
         let name_row = GtkBox::new(Orientation::Horizontal, 6);
 
-        // Favorite star indicator (visual only, not the toggle button)
-        if marker == "favorite" {
-            let star_lbl = Label::new(Some("★"));
-            star_lbl.set_margin_start(14);
-            name_row.append(&star_lbl);
-            name_lbl.set_margin_start(0);
-        } else {
-            name_lbl.set_margin_start(14);
-        }
+        name_lbl.set_margin_start(14);
         name_row.append(&name_lbl);
 
         // Tag badge
@@ -1020,13 +1024,14 @@ fn populate_list(state: &State) {
             info_box.add_css_class("project-ignored");
         }
 
-        let (icon, tooltip, marker_opacity) = match marker {
-            "favorite" => ("★", "Mark as ignored", 1.0),
-            "ignored" => ("🗑", "Reset to default", 1.0),
-            _ => ("☆", "Mark as favourite", 0.35),
+        let (icon, tooltip, css_class, marker_opacity) = match marker {
+            "favorite" => ("★", "Mark as ignored", "marker-favorite", 1.0),
+            "ignored" => ("🗑", "Reset to default", "marker-ignored", 1.0),
+            _ => ("☆", "Mark as favourite", "marker-neutral", 0.35),
         };
         let marker_btn = Button::with_label(icon);
         marker_btn.set_has_frame(false);
+        marker_btn.add_css_class(css_class);
         marker_btn.set_opacity(marker_opacity);
         marker_btn.set_tooltip_text(Some(tooltip));
         marker_btn.set_valign(gtk4::Align::Center);
