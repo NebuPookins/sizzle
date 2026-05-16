@@ -1,5 +1,6 @@
 pub mod markdown;
 pub mod terminal;
+pub mod kanban;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ use gtk4::{
 };
 
 use sizzle_core::{scan_projects, AgentPreset, MetadataStore, ScanSettings, ScannedProject};
+use crate::kanban::KanbanBoardWidget;
 
 // ── App state ─────────────────────────────────────────────────────────────
 
@@ -33,6 +35,8 @@ struct ProjectWidgets {
     /// The terminal that was most recently focused, restored when switching
     /// back to the project.
     focus_terminal: Option<terminal::TerminalWidget>,
+    /// The notebook where agent/shell terminal tabs are added.
+    notebook: Notebook,
 }
 
 #[derive(Clone)]
@@ -45,6 +49,7 @@ struct ShellTab {
 #[derive(Clone)]
 struct ShellTabContext {
     path: String,
+    working_dir: String,
     agent: terminal::TerminalWidget,
     shell_stack: Stack,
     tab_box: GtkBox,
@@ -73,6 +78,8 @@ struct AppState {
     /// 2-second timer can redraw them in-place (for the yellow → green
     /// transition) without recreating the entire list.
     status_dots: Rc<RefCell<Vec<DrawingArea>>>,
+    /// Kanban board widget, created once in build_ui.
+    kanban_board: Option<KanbanBoardWidget>,
 }
 
 type State = Rc<RefCell<AppState>>;
@@ -245,6 +252,15 @@ fn build_ui(app: &Application) {
     window.set_titlebar(Some(&header));
     window.set_icon_name(Some("net.nebupookins.sizzle"));
 
+    // ── Kanban board (added to project_stack before the placeholder) ────────
+    let window_widget: gtk4::Window = window.clone().upcast();
+    let kanban_board = KanbanBoardWidget::new(store.clone(), projects.clone(), &window_widget);
+
+    let kanban_container = kanban_board.container.clone();
+    kanban_container.set_hexpand(true);
+    kanban_container.set_vexpand(true);
+    project_stack.add_named(&kanban_container, Some("__kanban__"));
+
     let state = Rc::new(RefCell::new(AppState {
         store: store.clone(),
         projects,
@@ -255,7 +271,42 @@ fn build_ui(app: &Application) {
         repopulate: Arc::new(AtomicBool::new(false)),
         main_window: window.clone().upcast(),
         status_dots: Rc::new(RefCell::new(Vec::new())),
+        kanban_board: Some(kanban_board),
     }));
+
+    // Set up kanban agent launch callback.
+    state.borrow().kanban_board.as_ref().unwrap().set_on_launch_agent({
+        let state = state.clone();
+        move |project_path, working_dir, agent_label| {
+            log::info!("[kanban] Launch callback: project_path={}, working_dir={}, agent={}",
+                project_path, working_dir, agent_label);
+            // Ensure the project is initialized so its widgets exist.
+            select_project(&state, &project_path);
+
+            let (agent_cmd, tab_label) = {
+                let st = state.borrow();
+                let cmd = match agent_label.as_str() {
+                    "Claude" => Some("claude".to_string()),
+                    "Codex" => Some("codex".to_string()),
+                    _ => st.store.get_agent_presets().iter()
+                        .find(|p| p.label == agent_label)
+                        .map(|p| p.command.clone()),
+                };
+                (cmd, agent_label)
+            };
+
+            if let Some(cmd) = agent_cmd {
+                let notebook = state.borrow().project_widgets.get(&project_path)
+                    .map(|pw| pw.notebook.clone());
+                if let Some(nb) = notebook {
+                    log::info!("[kanban] Launching terminal: working_dir={}", working_dir);
+                    launch_terminals(&project_path, &working_dir, &tab_label, Some(cmd), &nb, &state);
+                } else {
+                    log::warn!("[kanban] No project widget found for path: {}", project_path);
+                }
+            }
+        }
+    });
 
     populate_list(&state);
 
@@ -269,9 +320,10 @@ fn build_ui(app: &Application) {
             let mut i = 0;
             while let Some(row) = st.list_box.row_at_index(i) {
                 let path = row.widget_name();
-                // Match against project data directly instead of navigating widget children,
-                // which fails when a dot DrawingArea is prepended for active projects.
-                let visible = if query.is_empty() {
+                let visible = if path == "__kanban__" || path == "__separator__" {
+                    // Always show kanban entry and its separator.
+                    true
+                } else if query.is_empty() {
                     true
                 } else {
                     st.projects
@@ -308,7 +360,17 @@ fn build_ui(app: &Application) {
         let state = state.clone();
         list_box.connect_row_activated(move |_, row| {
             let path = row.widget_name().to_string();
-            select_project(&state, &path);
+            if path == "__separator__" {
+                return;
+            }
+            if path == "__kanban__" {
+                let st = state.borrow();
+                st.project_stack.set_visible_child_name("__kanban__");
+                // Hide git status pane.
+                st.git_stack.set_visible_child_name("__placeholder__");
+            } else {
+                select_project(&state, &path);
+            }
         });
     }
 
@@ -851,6 +913,140 @@ fn build_ui(app: &Application) {
          }
          .content-area stack {
              background: transparent;
+         }
+         /* ── Kanban board ────────────────────────────────────────── */
+         .kanban-board {
+             background-color: #14112a;
+         }
+         .kanban-board scrollbar.horizontal {
+             min-height: 8px;
+         }
+         .kanban-column {
+             background-color: #1d1933;
+             border: 1px solid #2e2952;
+             border-radius: 8px;
+             min-width: 240px;
+         }
+         .kanban-col-header {
+             border-bottom: 1px solid #2e2952;
+         }
+         .kanban-col-title {
+             font-size: 13px;
+             font-weight: 600;
+             color: #ede8f8;
+         }
+         .kanban-col-wip {
+             font-size: 11px;
+             color: #514b6f;
+         }
+         .kanban-wip-over {
+             color: #ff5533;
+             font-weight: 700;
+         }
+         .kanban-col-menu {
+             color: #514b6f;
+             font-size: 14px;
+             padding: 0 4px;
+             min-width: 20px;
+             min-height: 20px;
+             border-radius: 4px;
+         }
+         .kanban-col-menu:hover {
+             background-color: #2c2554;
+             color: #ede8f8;
+         }
+         .kanban-card-scroll {
+             min-height: 80px;
+         }
+         .kanban-card {
+             background-color: #231e3e;
+             border: 1px solid #2e2952;
+             border-radius: 6px;
+             margin: 2px 0;
+         }
+         .kanban-card:hover {
+             border-color: #ff5533;
+         }
+         .kanban-card-title {
+             font-size: 12px;
+             font-weight: 500;
+             color: #ede8f8;
+         }
+         .kanban-card-meta {
+             font-size: 10px;
+             color: #514b6f;
+         }
+         .kanban-card-blocked {
+             font-size: 10px;
+             color: #f5a62a;
+             margin-top: 2px;
+         }
+         .kanban-add-card-btn {
+             background-color: transparent;
+             color: #514b6f;
+             font-size: 12px;
+             padding: 6px 8px;
+             margin: 4px 6px;
+             border: 1px dashed #2e2952;
+             border-radius: 5px;
+         }
+         .kanban-add-card-btn:hover {
+             background-color: #231e3e;
+             color: #9088b8;
+             border-style: solid;
+         }
+         .kanban-add-col-btn {
+             background-color: #1d1933;
+             color: #514b6f;
+             font-size: 12px;
+             padding: 8px 16px;
+             border: 1px dashed #2e2952;
+             border-radius: 8px;
+             min-width: 220px;
+         }
+         .kanban-add-col-btn:hover {
+             background-color: #231e3e;
+             color: #9088b8;
+             border-style: solid;
+         }
+         .kanban-sidebar-row {
+             border-bottom: 1px solid #2e2952;
+         }
+         .kanban-sidebar-row:selected {
+             border-left: 2px solid #00ccee !important;
+         }
+         .kanban-sidebar-icon {
+             font-size: 16px;
+             color: #00ccee;
+         }
+         .kanban-sidebar-text {
+             font-size: 13px;
+             font-weight: 600;
+             color: #89dceb;
+         }
+         .context-menu-item {
+             padding: 4px 10px;
+             font-size: 12px;
+             border-radius: 4px;
+         }
+         .context-menu-item:hover {
+             background-color: #2c2554;
+         }
+         .dialog-field-label {
+             font-size: 11px;
+             font-weight: 600;
+             color: #9088b8;
+         }
+         .dialog-field-required {
+             font-size: 9px;
+             font-weight: 400;
+             color: #ff5533;
+             font-style: italic;
+         }
+         .dialog-btn {
+             padding: 6px 16px;
+             font-size: 12px;
+             border-radius: 5px;
          }",
     );
     if let Some(display) = gdk::Display::default() {
@@ -937,6 +1133,41 @@ fn populate_list(state: &State) {
             }
         }
         st.list_box.remove(&row);
+    }
+
+    // ── "Kanban Board" entry at the top of the list ─────────────────────────
+    {
+        let kanban_icon = Label::builder()
+            .label("▦")
+            .css_classes(["kanban-sidebar-icon"])
+            .build();
+        let kanban_label = Label::builder()
+            .label("Kanban Board")
+            .halign(gtk4::Align::Start)
+            .css_classes(["kanban-sidebar-text"])
+            .build();
+
+        let row_box = GtkBox::new(Orientation::Horizontal, 6);
+        row_box.set_margin_start(14);
+        row_box.set_margin_top(8);
+        row_box.set_margin_bottom(6);
+        row_box.append(&kanban_icon);
+        row_box.append(&kanban_label);
+
+        let row = ListBoxRow::new();
+        row.set_widget_name("__kanban__");
+        row.add_css_class("kanban-sidebar-row");
+        row.set_child(Some(&row_box));
+        st.list_box.append(&row);
+
+        // Separator after kanban entry
+        let sep = gtk4::Separator::new(Orientation::Horizontal);
+        let sep_row = ListBoxRow::new();
+        sep_row.set_widget_name("__separator__");
+        sep_row.set_child(Some(&sep));
+        sep_row.set_selectable(false);
+        sep_row.set_focusable(false);
+        st.list_box.append(&sep_row);
     }
 
     let all_meta = st.store.get_all_metadata();
@@ -1188,6 +1419,14 @@ fn populate_list(state: &State) {
             });
         }
     }
+    // st (the immutable borrow) is still alive at this point but no longer used.
+    // Drop it so we can re-borrow state for the kanban update.
+    drop(st);
+    if let Some(kb) = state.borrow().kanban_board.as_ref() {
+        let projects = state.borrow().projects.clone();
+        let window = state.borrow().main_window.clone();
+        kb.set_projects(projects, &window);
+    }
 }
 
 // ── Switch to a project ────────────────────────────────────────────────────
@@ -1376,7 +1615,7 @@ fn select_project(state: &State, path: &str) {
                 let p = path.clone();
                 let st = state.clone();
                 claude_btn.connect_clicked(move |_| {
-                    launch_terminals(&p, "Claude", Some("claude".to_string()), &nb, &st);
+                    launch_terminals(&p, &p, "Claude", Some("claude".to_string()), &nb, &st);
                 });
             }
             {
@@ -1384,7 +1623,7 @@ fn select_project(state: &State, path: &str) {
                 let p = path.clone();
                 let st = state.clone();
                 codex_btn.connect_clicked(move |_| {
-                    launch_terminals(&p, "Codex", Some("codex".to_string()), &nb, &st);
+                    launch_terminals(&p, &p, "Codex", Some("codex".to_string()), &nb, &st);
                 });
             }
             {
@@ -1392,7 +1631,7 @@ fn select_project(state: &State, path: &str) {
                 let p = path.clone();
                 let st = state.clone();
                 shell_btn.connect_clicked(move |_| {
-                    launch_terminals(&p, "Shell", None, &nb, &st);
+                    launch_terminals(&p, &p, "Shell", None, &nb, &st);
                 });
             }
             for (btn, label, cmd) in preset_btns {
@@ -1400,7 +1639,7 @@ fn select_project(state: &State, path: &str) {
                 let p = path.clone();
                 let st = state.clone();
                 btn.connect_clicked(move |_| {
-                    launch_terminals(&p, &label, Some(cmd.clone()), &nb, &st);
+                    launch_terminals(&p, &p, &label, Some(cmd.clone()), &nb, &st);
                 });
             }
 
@@ -1411,6 +1650,7 @@ fn select_project(state: &State, path: &str) {
                     git_view,
                     terminals: Vec::new(),
                     focus_terminal: None,
+                    notebook: notebook.clone(),
                 },
             );
         }
@@ -1796,16 +2036,17 @@ fn explorer_show_file(
 // ── Launch a vertically split terminal pair ────────────────────────────────
 
 fn launch_terminals(
-    path: &str,
+    project_path: &str,
+    working_dir: &str,
     tab_label: &str,
     agent_cmd: Option<String>,
     notebook: &Notebook,
     state: &State,
 ) {
-    let agent = terminal::TerminalWidget::new(Some(path), agent_cmd);
+    let agent = terminal::TerminalWidget::new(Some(working_dir), agent_cmd);
     let repopulate = state.borrow().repopulate.clone();
     // Register the agent terminal so `populate_list` can draw a green dot.
-    if let Some(pw) = state.borrow_mut().project_widgets.get_mut(path) {
+    if let Some(pw) = state.borrow_mut().project_widgets.get_mut(project_path) {
         pw.terminals.push(agent.clone());
     }
 
@@ -1864,7 +2105,8 @@ fn launch_terminals(
     }
 
     let ctx = ShellTabContext {
-        path: path.to_string(),
+        path: project_path.to_string(),
+        working_dir: working_dir.to_string(),
         agent: agent.clone(),
         shell_stack,
         tab_box: middle_bar,
@@ -1914,7 +2156,7 @@ fn launch_terminals(
     agent.focus();
 
     // Store the focused terminal for focus memory restoration when switching back.
-    if let Some(pw) = state.borrow_mut().project_widgets.get_mut(path) {
+    if let Some(pw) = state.borrow_mut().project_widgets.get_mut(project_path) {
         pw.focus_terminal = Some(agent);
     }
 }
@@ -1927,7 +2169,7 @@ fn add_shell_tab(ctx: &ShellTabContext, focus: bool) -> terminal::TerminalWidget
     let id = ctx.next_shell_id.get();
     ctx.next_shell_id.set(id + 1);
 
-    let shell = terminal::TerminalWidget::new(Some(&ctx.path), None);
+    let shell = terminal::TerminalWidget::new(Some(&ctx.working_dir), None);
     let child_name = shell_child_name(id);
     ctx.shell_stack
         .add_named(&shell.container, Some(&child_name));

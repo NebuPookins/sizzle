@@ -1677,6 +1677,7 @@ dependencies = [
  "pangocairo",
  "pulldown-cmark",
  "sizzle-core",
+ "uuid",
 ]
 
 [[package]]

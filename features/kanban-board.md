@@ -38,7 +38,7 @@ A card represents a unit of work. Each card has:
 
 - A **title** (required)
 - A **description** (optional, free text)
-- The **project** it belongs to (selected from the list of scanned projects)
+- The **project** it belongs to (required, selected from the list of scanned projects)
 - An **assigned agent** (optional — selected from the list of configured agents:
   Claude, Codex, any Agent Preset the user has defined)
 - An optional **git worktree** — the card can be created with an isolated
@@ -50,6 +50,17 @@ checkbox labeled "Create git worktree". If the project does not have an
 associated git repository, the checkbox is greyed out. If the project does have
 an associated git repository, it is checked by default. When checked, Sizzle
 creates a new git worktree directory, then records the worktree path on the card.
+
+The modal for creating a project should mark which fields are required (e.g. by
+displaying a little asterisk). The confirmation button should be greyed out if
+not all the required fields have been provided. After the confirmation is clicked,
+the new card should be created and the modal is closed.
+
+The "Description" field in the modal should be multi-line and grow to match the
+size of its contents.
+
+The "project" field should let me type in a partial substring of the project
+to quickly search for the project I want to associate with the card.
 
 Cards can be edited (right-click → Edit), copied (right-click → Duplicate), or
 deleted (right-click → Delete, with a confirmation prompt).

@@ -53,6 +53,8 @@ struct DB {
     scan_settings: Option<ScanSettings>,
     #[serde(default)]
     agent_presets: Vec<AgentPreset>,
+    #[serde(default)]
+    kanban_board: Option<crate::kanban::KanbanBoard>,
 }
 
 pub struct MetadataStore {
@@ -92,6 +94,7 @@ impl MetadataStore {
                     projects: HashMap::new(),
                     scan_settings: None,
                     agent_presets: Vec::new(),
+                    kanban_board: None,
                 }
             }),
             Err(e) => {
@@ -100,6 +103,7 @@ impl MetadataStore {
                     projects: HashMap::new(),
                     scan_settings: None,
                     agent_presets: Vec::new(),
+                    kanban_board: None,
                 }
             },
         };
@@ -348,6 +352,17 @@ impl MetadataStore {
         db.agent_presets = presets;
         self.write_db(&db);
         db.agent_presets
+    }
+
+    pub fn get_kanban_board(&self) -> crate::kanban::KanbanBoard {
+        let db = self.read_db();
+        db.kanban_board.clone().unwrap_or(crate::kanban::KanbanBoard::default_board())
+    }
+
+    pub fn set_kanban_board(&self, board: &crate::kanban::KanbanBoard) {
+        let mut db = self.read_db();
+        db.kanban_board = Some(board.clone());
+        self.write_db(&db);
     }
 }
 
