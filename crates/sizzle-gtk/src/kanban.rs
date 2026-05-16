@@ -451,6 +451,45 @@ impl KanbanBoardWidget {
         // ── Right-click context menu ────────────────────────────────────────
         self.attach_card_context_menu(&card_box, &card_id, &card.column_id, parent_window);
 
+        // ── Double-click → Run with Agent ───────────────────────────────────
+        let dbl_self = self.clone();
+        let dbl_cid = card_id.clone();
+        let dbl_gesture = gtk4::GestureClick::new();
+        dbl_gesture.set_button(1);
+        dbl_gesture.connect_pressed(move |_, n_press, _, _| {
+            if n_press < 2 {
+                return;
+            }
+            // Same logic as "Run with Agent" context menu action.
+            if dbl_self.has_active_session(&dbl_cid) {
+                if let Some(ref cb) = *dbl_self.on_focus_session.borrow() {
+                    let board = dbl_self.board.borrow();
+                    if let Some(card) = board.get_card(&dbl_cid) {
+                        let pp = card.project_path.clone().unwrap_or_default();
+                        log::info!("[kanban] Double-click: reusing session for card {}", dbl_cid);
+                        cb(pp, dbl_cid.clone());
+                    }
+                }
+                return;
+            }
+
+            let board = dbl_self.board.borrow();
+            if let Some(card) = board.get_card(&dbl_cid) {
+                let proj_path = card.project_path.clone();
+                let working_dir = card.worktree_path.clone()
+                    .or_else(|| card.project_path.clone());
+                log::info!("[kanban] Double-click: Run with Agent for card {}", dbl_cid);
+                if let Some(ref agent) = card.assigned_agent {
+                    if let Some(ref cb) = *dbl_self.on_launch_agent.borrow() {
+                        if let (Some(pp), Some(wd)) = (proj_path, working_dir) {
+                            cb(pp, wd, agent.clone(), dbl_cid.clone());
+                        }
+                    }
+                }
+            }
+        });
+        card_box.add_controller(dbl_gesture);
+
         card_box
     }
 

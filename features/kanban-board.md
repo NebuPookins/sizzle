@@ -98,6 +98,8 @@ Right-clicking a card opens a context menu with these options:
   to the dual terminal layout of the texisting session, rather than create a
   new one.
 
+Double clicking on a card also runs the "Run with {Agent}" code path.
+
 ## Agent Capacity
 
 Each configured agent (Claude, Codex, any Agent Preset) conceptually has an
