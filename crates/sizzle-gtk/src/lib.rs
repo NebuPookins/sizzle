@@ -48,12 +48,14 @@ struct ShellTab {
 
 #[derive(Clone)]
 struct ShellTabContext {
-    path: String,
     working_dir: String,
     agent: terminal::TerminalWidget,
     shell_stack: Stack,
     tab_box: GtkBox,
-    state: State,
+    /// Per-project widget handle — focus handlers use this instead of global
+    /// `State` so they cannot cause `RefCell` re-entrancy panics when GTK
+    /// signals fire during a global state borrow.
+    pw: Rc<RefCell<ProjectWidgets>>,
     /// Signals the 2-second timer to call `populate_list` when a terminal
     /// exits, so the left-pane green dot updates immediately.
     repopulate: Arc<AtomicBool>,
@@ -65,7 +67,7 @@ struct ShellTabContext {
 struct AppState {
     store: Arc<MetadataStore>,
     projects: Vec<ScannedProject>,
-    project_widgets: HashMap<String, ProjectWidgets>,
+    project_widgets: HashMap<String, Rc<RefCell<ProjectWidgets>>>,
     project_stack: Stack,
     git_stack: Stack,
     list_box: ListBox,
@@ -297,7 +299,7 @@ fn build_ui(app: &Application) {
 
             if let Some(cmd) = agent_cmd {
                 let notebook = state.borrow().project_widgets.get(&project_path)
-                    .map(|pw| pw.notebook.clone());
+                    .map(|pw| pw.borrow().notebook.clone());
                 if let Some(nb) = notebook {
                     log::info!("[kanban] Launching terminal: working_dir={}", working_dir);
                     let (agent, paned) = launch_terminals(
@@ -323,16 +325,25 @@ fn build_ui(app: &Application) {
             log::info!("[kanban] Focus session: project_path={}, card_id={}", project_path, card_id);
             if project_path.is_empty() { return; }
             select_project(&state, &project_path);
-            if let Some(kb) = state.borrow().kanban_board.as_ref() {
-                if let Some((_pp, paned, terminal)) = kb.get_active_session_info(&card_id) {
-                    if let Some(pw) = state.borrow().project_widgets.get(&_pp) {
-                        if let Some(page_num) = pw.notebook.page_num(&paned) {
-                            pw.notebook.set_current_page(Some(page_num));
-                            terminal.focus();
-                        }
-                    }
-                }
-            }
+            // Extract notebook and terminal outside the borrow scope, because
+            // calling set_current_page / focus() triggers focus-enter signals
+            // that also borrow state (via activate_agent_terminal), causing
+            // RefCell::borrow_mut to panic.
+            let Some((notebook, page_num, terminal)) = ({
+                let st = state.borrow();
+                st.kanban_board.as_ref().and_then(|kb| {
+                    kb.get_active_session_info(&card_id).and_then(|(_pp, paned, terminal)| {
+                        let pw = st.project_widgets.get(&_pp)?;
+                        let pw = pw.borrow();
+                        pw.notebook.page_num(&paned)
+                            .map(|pn| (pw.notebook.clone(), pn, terminal.clone()))
+                    })
+                })
+            }) else {
+                return;
+            };
+            notebook.set_current_page(Some(page_num));
+            terminal.focus();
         }
     });
 
@@ -455,7 +466,7 @@ fn build_ui(app: &Application) {
             let has_alive = s
                 .project_widgets
                 .values()
-                .any(|pw| pw.terminals.iter().any(|t| t.is_alive()));
+                .any(|pw| pw.borrow().terminals.iter().any(|t| t.is_alive()));
             if has_alive {
                 let dots = s.status_dots.borrow();
                 for dot in dots.iter() {
@@ -485,7 +496,7 @@ fn build_ui(app: &Application) {
                 let path = name.to_string();
                 if path != "__placeholder__" {
                     if let Some(pw) = st.project_widgets.get(&path) {
-                        update_git_status(&path, &pw.git_view);
+                        update_git_status(&path, &pw.borrow().git_view);
                     }
                 }
             }
@@ -1135,8 +1146,8 @@ fn populate_list(state: &State) {
 
     // Clean up dead terminal references before rebuilding, so the per-project
     // vec doesn't grow unbounded when tabs are closed or processes exit.
-    for pw in state.borrow_mut().project_widgets.values_mut() {
-        pw.terminals.retain(|t| t.is_alive());
+    for pw in state.borrow().project_widgets.values() {
+        pw.borrow_mut().terminals.retain(|t| t.is_alive());
     }
 
     let st = state.borrow();
@@ -1218,7 +1229,7 @@ fn populate_list(state: &State) {
         let is_active = st
             .project_widgets
             .get(&p.path)
-            .map_or(false, |pw| pw.terminals.iter().any(|t| t.is_alive()));
+            .map_or(false, |pw| pw.borrow().terminals.iter().any(|t| t.is_alive()));
         let meta = all_meta.get(&p.path);
         let marker_key = marker_sort_key(meta.and_then(|m| m.marker.as_deref()));
         let time_key = Reverse(meta.and_then(|m| m.last_launched));
@@ -1242,7 +1253,7 @@ fn populate_list(state: &State) {
         let is_running = st
             .project_widgets
             .get(&project.path)
-            .map_or(false, |pw| pw.terminals.iter().any(|t| t.is_alive()));
+            .map_or(false, |pw| pw.borrow().terminals.iter().any(|t| t.is_alive()));
 
         let last_active = all_meta
             .get(&project.path)
@@ -1318,6 +1329,7 @@ fn populate_list(state: &State) {
         // no terminals are alive.  The draw function captures live `Arc` refs so
         // `queue_draw()` gives a fresh colour without recreating the entire list.
         if let Some(pw) = st.project_widgets.get(&project.path) {
+            let pw = pw.borrow();
             if pw.terminals.iter().any(|t| t.is_alive()) {
                 let activity_refs: Vec<Arc<Mutex<Option<Instant>>>> =
                     pw.terminals.iter().map(|t| t.last_activity()).collect();
@@ -1687,12 +1699,12 @@ fn select_project(state: &State, path: &str) {
             st.project_stack.add_named(&project_box, Some(&path));
             st.project_widgets.insert(
                 path.clone(),
-                ProjectWidgets {
+                Rc::new(RefCell::new(ProjectWidgets {
                     git_view,
                     terminals: Vec::new(),
                     focus_terminal: None,
                     notebook: notebook.clone(),
-                },
+                })),
             );
         }
     }
@@ -1706,12 +1718,12 @@ fn select_project(state: &State, path: &str) {
         st.project_stack.set_visible_child_name(&path);
         st.git_stack.set_visible_child_name(&path);
         if let Some(pw) = st.project_widgets.get(&path) {
-            update_git_status(&path, &pw.git_view);
+            update_git_status(&path, &pw.borrow().git_view);
         }
         st.store.set_last_launched(&path);
         st.project_widgets
             .get(&path)
-            .and_then(|pw| pw.focus_terminal.clone())
+            .and_then(|pw| pw.borrow().focus_terminal.clone())
     };
     if let Some(t) = terminal {
         t.focus();
@@ -2087,8 +2099,8 @@ fn launch_terminals(
     let agent = terminal::TerminalWidget::new(Some(working_dir), agent_cmd);
     let repopulate = state.borrow().repopulate.clone();
     // Register the agent terminal so `populate_list` can draw a green dot.
-    if let Some(pw) = state.borrow_mut().project_widgets.get_mut(project_path) {
-        pw.terminals.push(agent.clone());
+    if let Some(pw) = state.borrow().project_widgets.get(project_path) {
+        pw.borrow_mut().terminals.push(agent.clone());
     }
 
     {
@@ -2145,13 +2157,18 @@ fn launch_terminals(
         middle_bar.add_controller(drag);
     }
 
+    // Extract the per-project handle so focus handlers borrow this RefCell
+    // instead of global State, preventing RefCell re-entrancy panics.
+    let pw = state.borrow().project_widgets.get(project_path)
+        .cloned()
+        .expect("project_widgets entry must exist to launch terminals");
+
     let ctx = ShellTabContext {
-        path: project_path.to_string(),
         working_dir: working_dir.to_string(),
         agent: agent.clone(),
         shell_stack,
         tab_box: middle_bar,
-        state: state.clone(),
+        pw,
         repopulate: repopulate.clone(),
         shells: Rc::new(RefCell::new(Vec::new())),
         active_shell_id: Rc::new(Cell::new(0)),
@@ -2166,6 +2183,7 @@ fn launch_terminals(
     }
 
     let _shell = add_shell_tab(&ctx, false);
+    populate_list(state);
     activate_agent_terminal(&ctx);
 
     // Tab header: label + close button
@@ -2197,8 +2215,8 @@ fn launch_terminals(
     agent.focus();
 
     // Store the focused terminal for focus memory restoration when switching back.
-    if let Some(pw) = state.borrow_mut().project_widgets.get_mut(project_path) {
-        pw.focus_terminal = Some(agent.clone());
+    if let Some(pw) = state.borrow().project_widgets.get(project_path) {
+        pw.borrow_mut().focus_terminal = Some(agent.clone());
     }
 
     (agent, vpaned)
@@ -2218,9 +2236,7 @@ fn add_shell_tab(ctx: &ShellTabContext, focus: bool) -> terminal::TerminalWidget
         .add_named(&shell.container, Some(&child_name));
 
     // Register the shell terminal so `populate_list` can draw a green dot.
-    if let Some(pw) = ctx.state.borrow_mut().project_widgets.get_mut(&ctx.path) {
-        pw.terminals.push(shell.clone());
-    }
+    ctx.pw.borrow_mut().terminals.push(shell.clone());
 
     {
         let repopulate = ctx.repopulate.clone();
@@ -2237,7 +2253,6 @@ fn add_shell_tab(ctx: &ShellTabContext, focus: bool) -> terminal::TerminalWidget
 
     wire_shell_terminal(ctx, &shell, id);
     activate_shell_tab(ctx, id, focus);
-    populate_list(&ctx.state);
     shell
 }
 
@@ -2268,9 +2283,7 @@ fn activate_agent_terminal(ctx: &ShellTabContext) {
     for shell in ctx.shells.borrow().iter() {
         shell.terminal.set_focused(false);
     }
-    if let Some(pw) = ctx.state.borrow_mut().project_widgets.get_mut(&ctx.path) {
-        pw.focus_terminal = Some(ctx.agent.clone());
-    }
+    ctx.pw.borrow_mut().focus_terminal = Some(ctx.agent.clone());
 }
 
 fn activate_shell_tab(ctx: &ShellTabContext, shell_id: usize, grab_focus: bool) {
@@ -2289,12 +2302,7 @@ fn activate_shell_tab(ctx: &ShellTabContext, shell_id: usize, grab_focus: bool) 
     }
     ctx.agent.set_focused(false);
 
-    {
-        let mut st = ctx.state.borrow_mut();
-        if let Some(pw) = st.project_widgets.get_mut(&ctx.path) {
-            pw.focus_terminal = active_terminal.clone();
-        }
-    }
+    ctx.pw.borrow_mut().focus_terminal = active_terminal.clone();
 
     if changed {
         refresh_shell_tab_bar(ctx);
