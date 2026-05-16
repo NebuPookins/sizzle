@@ -90,7 +90,13 @@ Right-clicking a card opens a context menu with these options:
 - **Run with {Agent}** — launches the dual terminal layout as used in the main
   Sizzle UI, with the current directory set to the git worktree directory, and
   the top terminal running the agent associated with the card, and the lower
-  terminal running the user's default shell.
+  terminal running the user's default shell. This should also set a flag to
+  mark the card as "active", and the UI should update to indicate that an
+  active LLM coding agent is running for this card, perhaps with a green dot.
+  If there is already an active LLM coding agent session associated with a
+  card and the user selects "Run with {Agent}" again, the UI should switch
+  to the dual terminal layout of the texisting session, rather than create a
+  new one.
 
 ## Agent Capacity
 

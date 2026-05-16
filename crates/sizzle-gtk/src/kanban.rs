@@ -4,6 +4,7 @@
 //! Cards can be created, edited, duplicated, deleted, and dragged between columns.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, DropDown, Entry, GestureClick, Label, Popover,
+    Box as GtkBox, Button, DropDown, DrawingArea, Entry, GestureClick, Label, Popover,
     ScrolledWindow, StringList, TextView,
     CheckButton, Window,
 };
@@ -22,6 +23,15 @@ use sizzle_core::{
     kanban::{KanbanBoard, KanbanCard, KanbanColumn},
     MetadataStore, ScannedProject,
 };
+
+use crate::terminal::TerminalWidget;
+
+/// Tracks an active agent session launched from a card.
+struct ActiveSession {
+    terminal: TerminalWidget,
+    paned: gtk4::Paned,
+    project_path: String,
+}
 
 // ── Public widget ────────────────────────────────────────────────────────────
 
@@ -33,7 +43,15 @@ pub struct KanbanBoardWidget {
     store: Arc<MetadataStore>,
     projects: Rc<RefCell<Vec<ScannedProject>>>,
     board: Rc<RefCell<KanbanBoard>>,
-    on_launch_agent: RefCell<Option<Rc<dyn Fn(String, String, String)>>>,
+    parent_window: gtk4::Window,
+    /// Tracks active agent sessions launched from cards (card_id → session).
+    active_sessions: Rc<RefCell<HashMap<String, ActiveSession>>>,
+    /// Callback to launch an agent for a card.
+    /// Parameters: (project_path, working_directory, agent_label, card_id).
+    on_launch_agent: RefCell<Option<Rc<dyn Fn(String, String, String, String)>>>,
+    /// Callback to switch focus to an existing session.
+    /// Parameters: (project_path, card_id).
+    on_focus_session: RefCell<Option<Rc<dyn Fn(String, String)>>>,
 }
 
 impl KanbanBoardWidget {
@@ -65,7 +83,10 @@ impl KanbanBoardWidget {
             store,
             projects: Rc::new(RefCell::new(projects)),
             board,
+            parent_window: parent_window.clone(),
+            active_sessions: Rc::new(RefCell::new(HashMap::new())),
             on_launch_agent: RefCell::new(None),
+            on_focus_session: RefCell::new(None),
         };
 
         widget.refresh_board(&parent_window);
@@ -79,9 +100,76 @@ impl KanbanBoardWidget {
     }
 
     /// Register a callback for launching an agent from a card.
-    /// Parameters: (project_path, working_directory, agent_label).
-    pub fn set_on_launch_agent<F: Fn(String, String, String) + 'static>(&self, f: F) {
+    /// Parameters: (project_path, working_directory, agent_label, card_id).
+    pub fn set_on_launch_agent<F: Fn(String, String, String, String) + 'static>(&self, f: F) {
         *self.on_launch_agent.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Register a callback for switching focus to an existing session.
+    /// Parameters: (project_path, card_id).
+    pub fn set_on_focus_session<F: Fn(String, String) + 'static>(&self, f: F) {
+        *self.on_focus_session.borrow_mut() = Some(Rc::new(f));
+    }
+
+    // ── Session tracking ─────────────────────────────────────────────────────
+
+    /// Register an active agent session for a card.
+    pub fn register_active_session(
+        &self,
+        card_id: &str,
+        terminal: &TerminalWidget,
+        paned: &gtk4::Paned,
+        project_path: &str,
+    ) {
+        self.active_sessions.borrow_mut().insert(
+            card_id.to_string(),
+            ActiveSession {
+                terminal: terminal.clone(),
+                paned: paned.clone(),
+                project_path: project_path.to_string(),
+            },
+        );
+    }
+
+    /// Remove a session from tracking (e.g. on terminal exit).
+    pub fn unregister_active_session(&self, card_id: &str) {
+        self.active_sessions.borrow_mut().remove(card_id);
+    }
+
+    /// Returns true if the card has a live active session.
+    pub fn has_active_session(&self, card_id: &str) -> bool {
+        self.active_sessions
+            .borrow()
+            .get(card_id)
+            .map_or(false, |s| s.terminal.is_alive())
+    }
+
+    /// Get session info needed to switch focus to an existing session.
+    pub fn get_active_session_info(
+        &self,
+        card_id: &str,
+    ) -> Option<(String, gtk4::Paned, TerminalWidget)> {
+        let sessions = self.active_sessions.borrow();
+        sessions.get(card_id).filter(|s| s.terminal.is_alive()).map(|s| {
+            (
+                s.project_path.clone(),
+                s.paned.clone(),
+                s.terminal.clone(),
+            )
+        })
+    }
+
+    /// Remove dead sessions, returning true if any were removed.
+    pub fn cleanup_dead_sessions(&self) -> bool {
+        let mut sessions = self.active_sessions.borrow_mut();
+        let before = sessions.len();
+        sessions.retain(|_, s| s.terminal.is_alive());
+        sessions.len() != before
+    }
+
+    /// Rebuild the board from the stored state (uses stored parent window).
+    pub fn refresh_self(&self) {
+        self.refresh_board(&self.parent_window);
     }
 
     // ── Board construction ──────────────────────────────────────────────────
@@ -305,6 +393,28 @@ impl KanbanBoardWidget {
         inner.set_margin_bottom(6);
         inner.append(&title_lbl);
         inner.append(&meta_lbl);
+
+        // ── Active session indicator ─────────────────────────────────────────
+        if self.has_active_session(&card_id) {
+            let dot = DrawingArea::new();
+            dot.set_size_request(8, 8);
+            dot.set_valign(gtk4::Align::Center);
+            dot.set_draw_func(move |_, cr, w, h| {
+                let r = (w.min(h) as f64 / 2.0).min(4.0);
+                cr.set_source_rgb(0.31, 0.98, 0.48);
+                cr.arc(w as f64 / 2.0, h as f64 / 2.0, r - 0.5, 0.0, 2.0 * std::f64::consts::PI);
+                cr.fill().ok();
+            });
+            let active_row = GtkBox::new(gtk4::Orientation::Horizontal, 4);
+            active_row.set_margin_top(2);
+            let active_lbl = Label::builder()
+                .label("Active")
+                .css_classes(["kanban-card-active"])
+                .build();
+            active_row.append(&dot);
+            active_row.append(&active_lbl);
+            inner.append(&active_row);
+        }
 
         let card_box = GtkBox::new(gtk4::Orientation::Vertical, 0);
         card_box.add_css_class("kanban-card");
@@ -872,6 +982,20 @@ impl KanbanBoardWidget {
         let pop_close_run = popover2.clone();
         run_btn2.connect_clicked(move |_| {
             pop_close_run.popdown();
+
+            // Check for existing active session first.
+            if self_run.has_active_session(&cid_run) {
+                if let Some(ref cb) = *self_run.on_focus_session.borrow() {
+                    let board = self_run.board.borrow();
+                    if let Some(card) = board.get_card(&cid_run) {
+                        let pp = card.project_path.clone().unwrap_or_default();
+                        log::info!("[kanban] Reusing existing session for card {}", cid_run);
+                        cb(pp, cid_run.clone());
+                    }
+                }
+                return;
+            }
+
             let board = self_run.board.borrow();
             if let Some(card) = board.get_card(&cid_run) {
                 let proj_path = card.project_path.clone();
@@ -882,7 +1006,7 @@ impl KanbanBoardWidget {
                 if let Some(ref agent) = card.assigned_agent {
                     if let Some(ref cb) = *self_run.on_launch_agent.borrow() {
                         if let (Some(pp), Some(wd)) = (proj_path, working_dir) {
-                            cb(pp, wd, agent.clone());
+                            cb(pp, wd, agent.clone(), cid_run.clone());
                         }
                     }
                 }

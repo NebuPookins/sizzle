@@ -277,9 +277,9 @@ fn build_ui(app: &Application) {
     // Set up kanban agent launch callback.
     state.borrow().kanban_board.as_ref().unwrap().set_on_launch_agent({
         let state = state.clone();
-        move |project_path, working_dir, agent_label| {
-            log::info!("[kanban] Launch callback: project_path={}, working_dir={}, agent={}",
-                project_path, working_dir, agent_label);
+        move |project_path, working_dir, agent_label, card_id| {
+            log::info!("[kanban] Launch callback: project_path={}, working_dir={}, agent={}, card_id={}",
+                project_path, working_dir, agent_label, card_id);
             // Ensure the project is initialized so its widgets exist.
             select_project(&state, &project_path);
 
@@ -300,9 +300,37 @@ fn build_ui(app: &Application) {
                     .map(|pw| pw.notebook.clone());
                 if let Some(nb) = notebook {
                     log::info!("[kanban] Launching terminal: working_dir={}", working_dir);
-                    launch_terminals(&project_path, &working_dir, &tab_label, Some(cmd), &nb, &state);
+                    let (agent, paned) = launch_terminals(
+                        &project_path, &working_dir, &tab_label, Some(cmd), &nb, &state,
+                    );
+                    // Register the session with the kanban board and refresh
+                    // so the green dot appears on the card.
+                    if let Some(kb) = state.borrow().kanban_board.as_ref() {
+                        kb.register_active_session(&card_id, &agent, &paned, &project_path);
+                        kb.refresh_self();
+                    }
                 } else {
                     log::warn!("[kanban] No project widget found for path: {}", project_path);
+                }
+            }
+        }
+    });
+
+    // Set up kanban focus-existing-session callback.
+    state.borrow().kanban_board.as_ref().unwrap().set_on_focus_session({
+        let state = state.clone();
+        move |project_path, card_id| {
+            log::info!("[kanban] Focus session: project_path={}, card_id={}", project_path, card_id);
+            if project_path.is_empty() { return; }
+            select_project(&state, &project_path);
+            if let Some(kb) = state.borrow().kanban_board.as_ref() {
+                if let Some((_pp, paned, terminal)) = kb.get_active_session_info(&card_id) {
+                    if let Some(pw) = state.borrow().project_widgets.get(&_pp) {
+                        if let Some(page_num) = pw.notebook.page_num(&paned) {
+                            pw.notebook.set_current_page(Some(page_num));
+                            terminal.focus();
+                        }
+                    }
                 }
             }
         }
@@ -407,6 +435,15 @@ fn build_ui(app: &Application) {
             .swap(false, Ordering::Acquire)
         {
             populate_list(&timer_state);
+        }
+
+        // Kanban: clean up dead sessions and refresh board if needed.
+        // Runs on every tick so that card green dots update promptly when
+        // agent terminals exit (even those not launched via kanban).
+        if let Some(ref kb) = timer_state.borrow().kanban_board {
+            if kb.cleanup_dead_sessions() {
+                kb.refresh_self();
+            }
         }
 
         // Refresh status dots (yellow/green) while any terminal is alive —
@@ -980,6 +1017,10 @@ fn build_ui(app: &Application) {
              font-size: 10px;
              color: #f5a62a;
              margin-top: 2px;
+         }
+         .kanban-card-active {
+             font-size: 10px;
+             color: #50fa7b;
          }
          .kanban-add-card-btn {
              background-color: transparent;
@@ -1615,7 +1656,7 @@ fn select_project(state: &State, path: &str) {
                 let p = path.clone();
                 let st = state.clone();
                 claude_btn.connect_clicked(move |_| {
-                    launch_terminals(&p, &p, "Claude", Some("claude".to_string()), &nb, &st);
+                    let _ = launch_terminals(&p, &p, "Claude", Some("claude".to_string()), &nb, &st);
                 });
             }
             {
@@ -1623,7 +1664,7 @@ fn select_project(state: &State, path: &str) {
                 let p = path.clone();
                 let st = state.clone();
                 codex_btn.connect_clicked(move |_| {
-                    launch_terminals(&p, &p, "Codex", Some("codex".to_string()), &nb, &st);
+                    let _ = launch_terminals(&p, &p, "Codex", Some("codex".to_string()), &nb, &st);
                 });
             }
             {
@@ -1631,7 +1672,7 @@ fn select_project(state: &State, path: &str) {
                 let p = path.clone();
                 let st = state.clone();
                 shell_btn.connect_clicked(move |_| {
-                    launch_terminals(&p, &p, "Shell", None, &nb, &st);
+                    let _ = launch_terminals(&p, &p, "Shell", None, &nb, &st);
                 });
             }
             for (btn, label, cmd) in preset_btns {
@@ -1639,7 +1680,7 @@ fn select_project(state: &State, path: &str) {
                 let p = path.clone();
                 let st = state.clone();
                 btn.connect_clicked(move |_| {
-                    launch_terminals(&p, &p, &label, Some(cmd.clone()), &nb, &st);
+                    let _ = launch_terminals(&p, &p, &label, Some(cmd.clone()), &nb, &st);
                 });
             }
 
@@ -2042,7 +2083,7 @@ fn launch_terminals(
     agent_cmd: Option<String>,
     notebook: &Notebook,
     state: &State,
-) {
+) -> (terminal::TerminalWidget, gtk4::Paned) {
     let agent = terminal::TerminalWidget::new(Some(working_dir), agent_cmd);
     let repopulate = state.borrow().repopulate.clone();
     // Register the agent terminal so `populate_list` can draw a green dot.
@@ -2157,8 +2198,10 @@ fn launch_terminals(
 
     // Store the focused terminal for focus memory restoration when switching back.
     if let Some(pw) = state.borrow_mut().project_widgets.get_mut(project_path) {
-        pw.focus_terminal = Some(agent);
+        pw.focus_terminal = Some(agent.clone());
     }
+
+    (agent, vpaned)
 }
 
 fn shell_child_name(id: usize) -> String {
