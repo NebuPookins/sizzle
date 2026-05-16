@@ -16,8 +16,9 @@ use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
-    GestureClick, HeaderBar, Label, ListBox, ListBoxRow, Notebook, Orientation, Paned, Picture,
-    Popover, ScrolledWindow, Stack, StackTransitionType, TextView, WrapMode,
+    EventControllerKey, GestureClick, HeaderBar, Label, ListBox, ListBoxRow, Notebook,
+    Orientation, Paned, Picture, Popover, ScrolledWindow, Stack, StackTransitionType, TextView,
+    WrapMode,
 };
 
 use sizzle_core::{scan_projects, AgentPreset, MetadataStore, ScanSettings, ScannedProject};
@@ -1580,6 +1581,31 @@ fn select_project(state: &State, path: &str) {
                     }
                 });
 
+                // Ctrl+S to save
+                {
+                    let mv_saver = mv.clone();
+                    let fp = md_path.clone();
+                    let eb4 = edit_btn.clone();
+                    let sb4 = save_btn.clone();
+                    let cb4 = cancel_btn.clone();
+                    let ctrl_key = EventControllerKey::new();
+                    ctrl_key.connect_key_pressed(move |_, kv, _, mods| {
+                        if kv == gdk::Key::s && mods.contains(gdk::ModifierType::CONTROL_MASK) {
+                            let text = mv_saver.get_buffer_text();
+                            mv_saver.set_source(&text);
+                            if sizzle_core::files::write_markdown_file(fp.clone(), text).is_ok() {
+                                mv_saver.set_editable(false);
+                                eb4.set_visible(true);
+                                sb4.set_visible(false);
+                                cb4.set_visible(false);
+                            }
+                            return glib::Propagation::Stop;
+                        }
+                        glib::Propagation::Proceed
+                    });
+                    mv.view().add_controller(ctrl_key);
+                }
+
                 let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
                 container.append(&toolbar);
                 container.append(&mv.scroll);
@@ -1898,6 +1924,34 @@ fn build_explorer_tab(project_root: &str) -> Paned {
                 }
             }
         });
+    }
+
+    // Ctrl+S to save in explorer
+    {
+        let mv = md_view.clone();
+        let path = current_md_path.clone();
+        let eb = md_edit_btn.clone();
+        let sb = md_save_btn.clone();
+        let cb = md_cancel_btn.clone();
+        let ctrl_key = EventControllerKey::new();
+        ctrl_key.connect_key_pressed(move |_, kv, _, mods| {
+            if kv == gdk::Key::s && mods.contains(gdk::ModifierType::CONTROL_MASK) {
+                let text = mv.get_buffer_text();
+                let file_path = path.borrow().clone();
+                if let Some(fp) = file_path {
+                    mv.set_source(&text);
+                    if sizzle_core::files::write_markdown_file(fp, text).is_ok() {
+                        mv.set_editable(false);
+                        eb.set_visible(true);
+                        sb.set_visible(false);
+                        cb.set_visible(false);
+                    }
+                }
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        md_view.view().add_controller(ctrl_key);
     }
 
     content_stack.set_visible_child_name("placeholder");

@@ -103,6 +103,10 @@ impl MarkdownView {
         buf.text(&start, &end, false).to_string()
     }
 
+    pub fn view(&self) -> &TextView {
+        &self.view
+    }
+
     /// Update the stored markdown source (e.g. after a successful save).
     pub fn set_source(&self, text: &str) {
         *self.source.borrow_mut() = text.to_string();
