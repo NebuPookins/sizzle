@@ -82,7 +82,11 @@ Right-clicking a card opens a context menu with these options:
 - **Edit** — opens the card dialog with current values pre-filled
 - **Duplicate** — creates a copy of the card in the same column
 - **Delete** — removes the card (and optionally removes its git worktree if it
-  has one)
+  has one). The modal should explicitly state whether there is a git worktree
+  associated with the card, its exact path, whether it has any uncommitted
+  changes, and whether the latest commit on the worktree branch is also merged
+  into some other branch, to ensure that no work is lost by deleting that
+  card.
 - **Run with {Agent}** — launches the dual terminal layout as used in the main
   Sizzle UI, with the current directory set to the git worktree directory, and
   the top terminal running the agent associated with the card, and the lower

@@ -4,6 +4,7 @@
 //! Cards can be created, edited, duplicated, deleted, and dragged between columns.
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -899,19 +900,118 @@ impl KanbanBoardWidget {
             let cid_del2 = cid_del.clone();
             let pw_del2 = pw_del.clone();
 
+            // Look up the card and check worktree status.
+            enum WtStatus { NotFound, Present { has_changes: bool, merged: Option<bool> } }
+            let worktree_info: Option<(String, WtStatus)> = {
+                let board = self_del2.board.borrow();
+                board.get_card(&cid_del2).and_then(|card| {
+                    card.worktree_path.as_ref().map(|wt| {
+                        let p = Path::new(wt);
+                        if p.exists() {
+                            let has_changes =
+                                sizzle_core::git::worktree_has_uncommitted_changes(wt);
+                            let merged =
+                                sizzle_core::git::is_latest_commit_merged_elsewhere(wt);
+                            (wt.clone(), WtStatus::Present { has_changes, merged })
+                        } else {
+                            (wt.clone(), WtStatus::NotFound)
+                        }
+                    })
+                })
+            };
+
             let confirm_win = Window::builder()
                 .title("Delete Card")
                 .modal(true)
                 .transient_for(&pw_del2)
-                .default_width(300)
+                .default_width(420)
                 .build();
+
+            let vbox2 = GtkBox::new(gtk4::Orientation::Vertical, 8);
+            vbox2.set_margin_start(12);
+            vbox2.set_margin_end(12);
+            vbox2.set_margin_top(12);
+            vbox2.set_margin_bottom(12);
+
             let confirm_label = Label::builder()
-                .label("Delete this card?\n\nThis action cannot be undone.")
+                .label("Delete this card?")
                 .wrap(true)
-                .margin_start(12)
-                .margin_end(12)
-                .margin_top(12)
                 .build();
+            vbox2.append(&confirm_label);
+
+            let warn_label = Label::builder()
+                .label("This action cannot be undone.")
+                .wrap(true)
+                .build();
+            vbox2.append(&warn_label);
+
+            let remove_worktree_check = CheckButton::builder()
+                .label("Also remove the git worktree")
+                .active(true)
+                .build();
+
+            if let Some((ref wt_path, ref wt_status)) = worktree_info {
+                let info_frame = GtkBox::new(gtk4::Orientation::Vertical, 4);
+                info_frame.set_margin_top(8);
+                info_frame.set_margin_bottom(8);
+
+                match wt_status {
+                    WtStatus::NotFound => {
+                        let pl = Label::builder()
+                            .label(format!("Git worktree (directory not found):\n{}", wt_path))
+                            .wrap(true)
+                            .xalign(0.0)
+                            .build();
+                        info_frame.append(&pl);
+                    }
+                    WtStatus::Present { has_changes, merged } => {
+                        let pl = Label::builder()
+                            .label(format!("Git worktree:\n{}", wt_path))
+                            .wrap(true)
+                            .xalign(0.0)
+                            .build();
+                        info_frame.append(&pl);
+
+                        let cl = Label::builder()
+                            .label(if *has_changes {
+                                "⚠ Has uncommitted changes"
+                            } else {
+                                "✓ No uncommitted changes"
+                            })
+                            .xalign(0.0)
+                            .build();
+                        info_frame.append(&cl);
+
+                        let ml = Label::builder()
+                            .label(match merged {
+                                Some(true) =>
+                                    "✓ Latest commit is merged into another branch",
+                                Some(false) =>
+                                    "⚠ Latest commit is NOT merged into any other branch",
+                                None =>
+                                    "? Could not determine if commits are merged elsewhere",
+                            })
+                            .xalign(0.0)
+                            .wrap(true)
+                            .build();
+                        info_frame.append(&ml);
+                    }
+                }
+                vbox2.append(&info_frame);
+
+                if matches!(wt_status, WtStatus::Present { .. }) {
+                    vbox2.append(&remove_worktree_check);
+                }
+            } else {
+                let no_wt_label = Label::builder()
+                    .label("No git worktree associated with this card.")
+                    .xalign(0.0)
+                    .margin_top(8)
+                    .margin_bottom(8)
+                    .build();
+                vbox2.append(&no_wt_label);
+            }
+
             let yes_btn = Button::builder()
                 .label("Delete")
                 .css_classes(["suggested-action"])
@@ -921,18 +1021,24 @@ impl KanbanBoardWidget {
                 .build();
             let btn_box2 = GtkBox::new(gtk4::Orientation::Horizontal, 8);
             btn_box2.set_halign(gtk4::Align::End);
-            btn_box2.set_margin_start(12);
-            btn_box2.set_margin_end(12);
-            btn_box2.set_margin_bottom(12);
             btn_box2.append(&no_btn);
             btn_box2.append(&yes_btn);
-            let vbox2 = GtkBox::new(gtk4::Orientation::Vertical, 0);
-            vbox2.append(&confirm_label);
             vbox2.append(&btn_box2);
+
             confirm_win.set_child(Some(&vbox2));
 
             let confirm_win2 = confirm_win.clone();
             yes_btn.connect_clicked(move |_| {
+                // Optionally remove the git worktree if the directory still exists.
+                if remove_worktree_check.is_active() {
+                    if let Some((ref wt_path, WtStatus::Present { .. })) = worktree_info {
+                        let _ = std::process::Command::new("git")
+                            .args(["worktree", "remove", "--force"])
+                            .arg(wt_path)
+                            .output();
+                        let _ = std::fs::remove_dir_all(wt_path);
+                    }
+                }
                 self_del2.board.borrow_mut().cards.retain(|c| c.id != cid_del2);
                 self_del2.save_and_refresh(&pw_del2);
                 confirm_win2.close();

@@ -207,6 +207,59 @@ fn normalize_github_url(url: &str) -> Option<String> {
     None
 }
 
+/// Check if a worktree directory has uncommitted changes.
+pub fn worktree_has_uncommitted_changes(worktree_path: &str) -> bool {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(worktree_path)
+        .output();
+    matches!(output, Ok(out) if out.status.success() && !out.stdout.is_empty())
+}
+
+/// Check if the latest commit on the given worktree is merged into any other branch.
+/// Returns `None` if the git command fails (e.g. no commits yet).
+pub fn is_latest_commit_merged_elsewhere(worktree_path: &str) -> Option<bool> {
+    let head_output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(worktree_path)
+        .output()
+        .ok()?;
+    if !head_output.status.success() {
+        return None;
+    }
+    let head_commit = String::from_utf8_lossy(&head_output.stdout).trim().to_string();
+
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(worktree_path)
+        .output()
+        .ok()?;
+    if !branch_output.status.success() {
+        return None;
+    }
+    let current_branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+
+    let contains_output = Command::new("git")
+        .args(["branch", "--contains", &head_commit, "--format", "%(refname:short)"])
+        .current_dir(worktree_path)
+        .output()
+        .ok()?;
+    if !contains_output.status.success() {
+        return None;
+    }
+
+    let contains_stdout = String::from_utf8_lossy(&contains_output.stdout);
+    let branches: Vec<&str> = contains_stdout
+        .lines()
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty())
+        .collect();
+
+    // If any branch other than the current one contains this commit,
+    // the work has been merged elsewhere.
+    Some(branches.iter().any(|b| *b != current_branch))
+}
+
 pub fn get_project_repository_info(project_path: String) -> ProjectRepositoryInfo {
     let dir = Path::new(&project_path);
     let git_dir = match find_git_dir(dir) {
