@@ -218,7 +218,9 @@ pub fn worktree_has_uncommitted_changes(worktree_path: &str) -> bool {
 
 /// Check if the latest commit on the given worktree is merged into any other branch.
 /// Returns `None` if the git command fails (e.g. no commits yet).
-pub fn is_latest_commit_merged_elsewhere(worktree_path: &str) -> Option<bool> {
+/// Returns `Some(list)` containing branch names (excluding the current branch)
+/// that contain the commit. An empty list means the commit is not merged anywhere.
+pub fn is_latest_commit_merged_elsewhere(worktree_path: &str) -> Option<Vec<String>> {
     let head_output = Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(worktree_path)
@@ -249,15 +251,13 @@ pub fn is_latest_commit_merged_elsewhere(worktree_path: &str) -> Option<bool> {
     }
 
     let contains_stdout = String::from_utf8_lossy(&contains_output.stdout);
-    let branches: Vec<&str> = contains_stdout
+    let merged_branches: Vec<String> = contains_stdout
         .lines()
-        .map(|b| b.trim())
-        .filter(|b| !b.is_empty())
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty() && *b != current_branch)
         .collect();
 
-    // If any branch other than the current one contains this commit,
-    // the work has been merged elsewhere.
-    Some(branches.iter().any(|b| *b != current_branch))
+    Some(merged_branches)
 }
 
 pub fn get_project_repository_info(project_path: String) -> ProjectRepositoryInfo {

@@ -85,8 +85,8 @@ Right-clicking a card opens a context menu with these options:
   has one). The modal should explicitly state whether there is a git worktree
   associated with the card, its exact path, whether it has any uncommitted
   changes, and whether the latest commit on the worktree branch is also merged
-  into some other branch, to ensure that no work is lost by deleting that
-  card.
+  into some other branch (and if so, the name of the branches it has been merged
+  into), to ensure that no work is lost by deleting that card.
 - **Run with {Agent}** — launches the dual terminal layout as used in the main
   Sizzle UI, with the current directory set to the git worktree directory, and
   the top terminal running the agent associated with the card, and the lower

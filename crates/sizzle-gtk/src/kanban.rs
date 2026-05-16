@@ -1025,7 +1025,7 @@ impl KanbanBoardWidget {
             let pw_del2 = pw_del.clone();
 
             // Look up the card and check worktree status.
-            enum WtStatus { NotFound, Present { has_changes: bool, merged: Option<bool> } }
+            enum WtStatus { NotFound, Present { has_changes: bool, merged: Option<Vec<String>> } }
             let worktree_info: Option<(String, WtStatus)> = {
                 let board = self_del2.board.borrow();
                 board.get_card(&cid_del2).and_then(|card| {
@@ -1108,12 +1108,14 @@ impl KanbanBoardWidget {
 
                         let ml = Label::builder()
                             .label(match merged {
-                                Some(true) =>
-                                    "✓ Latest commit is merged into another branch",
-                                Some(false) =>
-                                    "⚠ Latest commit is NOT merged into any other branch",
+                                Some(branches) if !branches.is_empty() => {
+                                    let names = branches.join(", ");
+                                    format!("✓ Merged into: {}", names)
+                                }
+                                Some(_) =>
+                                    "⚠ Latest commit is NOT merged into any other branch".to_string(),
                                 None =>
-                                    "? Could not determine if commits are merged elsewhere",
+                                    "? Could not determine if commits are merged elsewhere".to_string(),
                             })
                             .xalign(0.0)
                             .wrap(true)
