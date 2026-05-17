@@ -126,6 +126,12 @@ just refuse to do any work), and the user can update the timestamp to any value
 The agents available for card assignment come from the existing Agent Presets in
 the Settings window.
 
+## Git Status
+
+When an LLM Coding Agent Session is launched for a card, the Git Status panel
+on the right should show the Git Status of the worktree, not the original project
+root.
+
 ## Edge Cases
 
 - **No git repo**: If the project doesn't have a git repository, the "Create git

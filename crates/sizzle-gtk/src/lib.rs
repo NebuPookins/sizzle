@@ -38,6 +38,10 @@ struct ProjectWidgets {
     focus_terminal: Option<terminal::TerminalWidget>,
     /// The notebook where agent/shell terminal tabs are added.
     notebook: Notebook,
+    /// When an agent session is launched in a git worktree (e.g. from a kanban
+    /// card), this holds the worktree path so the git status panel shows that
+    /// worktree's status rather than the project root's.
+    active_git_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -70,7 +74,6 @@ struct AppState {
     projects: Vec<ScannedProject>,
     project_widgets: HashMap<String, Rc<RefCell<ProjectWidgets>>>,
     project_stack: Stack,
-    git_stack: Stack,
     list_box: ListBox,
     /// Set to `true` when a terminal's child process exits or is shut down,
     /// triggering the 2-second timer to call `populate_list` so the left-pane
@@ -230,17 +233,9 @@ fn build_ui(app: &Application) {
     project_stack.add_named(&placeholder, Some("__placeholder__"));
     project_stack.set_visible_child_name("__placeholder__");
 
-    let git_stack = Stack::new();
-
-    let inner_paned = Paned::new(Orientation::Horizontal);
-    inner_paned.set_start_child(Some(&project_stack));
-    inner_paned.set_end_child(Some(&git_stack));
-    inner_paned.set_position(700);
-    inner_paned.set_shrink_start_child(false);
-
     let outer_paned = Paned::new(Orientation::Horizontal);
     outer_paned.set_start_child(Some(&left));
-    outer_paned.set_end_child(Some(&inner_paned));
+    outer_paned.set_end_child(Some(&project_stack));
     outer_paned.set_position(240);
     outer_paned.set_shrink_start_child(true);
     outer_paned.set_shrink_end_child(false);
@@ -269,7 +264,6 @@ fn build_ui(app: &Application) {
         projects,
         project_widgets: HashMap::new(),
         project_stack: project_stack.clone(),
-        git_stack: git_stack.clone(),
         list_box: list_box.clone(),
         repopulate: Arc::new(AtomicBool::new(false)),
         main_window: window.clone().upcast(),
@@ -306,6 +300,14 @@ fn build_ui(app: &Application) {
                     let (agent, paned) = launch_terminals(
                         &project_path, &working_dir, &tab_label, Some(cmd), &nb, &state,
                     );
+                    // Force immediate git status update to show worktree status
+                    // instead of waiting for the 5-second timer.
+                    if working_dir != project_path {
+                        if let Some(pw) = state.borrow().project_widgets.get(&project_path) {
+                            let pw = pw.borrow();
+                            update_git_status(&working_dir, &pw.git_view);
+                        }
+                    }
                     // Register the session with the kanban board and refresh
                     // so the green dot appears on the card.
                     if let Some(kb) = state.borrow().kanban_board.as_ref() {
@@ -406,8 +408,6 @@ fn build_ui(app: &Application) {
             if path == "__kanban__" {
                 let st = state.borrow();
                 st.project_stack.set_visible_child_name("__kanban__");
-                // Hide git status pane.
-                st.git_stack.set_visible_child_name("__placeholder__");
             } else {
                 select_project(&state, &path);
             }
@@ -497,7 +497,9 @@ fn build_ui(app: &Application) {
                 let path = name.to_string();
                 if path != "__placeholder__" {
                     if let Some(pw) = st.project_widgets.get(&path) {
-                        update_git_status(&path, &pw.borrow().git_view);
+                        let pw = pw.borrow();
+                        let git_path = pw.active_git_path.as_deref().unwrap_or(&path);
+                        update_git_status(git_path, &pw.git_view);
                     }
                 }
             }
@@ -1681,8 +1683,6 @@ fn select_project(state: &State, path: &str) {
             git_container.append(&git_header_box);
             git_container.append(&git_scroll);
 
-            st.git_stack.add_named(&git_container, Some(&path));
-
             let project_box = GtkBox::new(Orientation::Vertical, 0);
             project_box.add_css_class("content-area");
             project_box.append(&top_bar);
@@ -1722,7 +1722,16 @@ fn select_project(state: &State, path: &str) {
                 });
             }
 
-            st.project_stack.add_named(&project_box, Some(&path));
+            // Wrap project content + git status in a horizontal Paned so the
+            // git panel is only shown when a project is active, not when
+            // viewing the kanban board or placeholder.
+            let project_paned = Paned::new(Orientation::Horizontal);
+            project_paned.set_start_child(Some(&project_box));
+            project_paned.set_end_child(Some(&git_container));
+            project_paned.set_position(700);
+            project_paned.set_shrink_start_child(false);
+
+            st.project_stack.add_named(&project_paned, Some(&path));
             st.project_widgets.insert(
                 path.clone(),
                 Rc::new(RefCell::new(ProjectWidgets {
@@ -1730,6 +1739,7 @@ fn select_project(state: &State, path: &str) {
                     terminals: Vec::new(),
                     focus_terminal: None,
                     notebook: notebook.clone(),
+                    active_git_path: None,
                 })),
             );
         }
@@ -1742,9 +1752,10 @@ fn select_project(state: &State, path: &str) {
     let terminal = {
         let st = state.borrow();
         st.project_stack.set_visible_child_name(&path);
-        st.git_stack.set_visible_child_name(&path);
         if let Some(pw) = st.project_widgets.get(&path) {
-            update_git_status(&path, &pw.borrow().git_view);
+            let pw = pw.borrow();
+            let git_path = pw.active_git_path.as_deref().unwrap_or(&path);
+            update_git_status(git_path, &pw.git_view);
         }
         st.store.set_last_launched(&path);
         st.project_widgets
@@ -2155,6 +2166,14 @@ fn launch_terminals(
     // Register the agent terminal so `populate_list` can draw a green dot.
     if let Some(pw) = state.borrow().project_widgets.get(project_path) {
         pw.borrow_mut().terminals.push(agent.clone());
+    }
+    // When the working directory differs from the project path (e.g. launching
+    // an agent in a kanban card's git worktree), set the active_git_path so the
+    // git status panel shows the worktree's status instead of the project root.
+    if project_path != working_dir {
+        if let Some(pw) = state.borrow().project_widgets.get(project_path) {
+            pw.borrow_mut().active_git_path = Some(working_dir.to_string());
+        }
     }
 
     {
