@@ -408,6 +408,7 @@ fn build_ui(app: &Application) {
             if path == "__kanban__" {
                 let st = state.borrow();
                 st.project_stack.set_visible_child_name("__kanban__");
+                st.main_window.set_title(Some("Sizzle"));
             } else {
                 select_project(&state, &path);
             }
@@ -1758,6 +1759,10 @@ fn select_project(state: &State, path: &str) {
             update_git_status(git_path, &pw.git_view);
         }
         st.store.set_last_launched(&path);
+        if let Some(project) = st.projects.iter().find(|p| p.path == path) {
+            st.main_window
+                .set_title(Some(&format!("Sizzle – {}", project.name)));
+        }
         st.project_widgets
             .get(&path)
             .and_then(|pw| pw.borrow().focus_terminal.clone())
