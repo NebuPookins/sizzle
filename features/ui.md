@@ -14,6 +14,14 @@ editor tab of the project. It's possible for different editor tabs within a
 project to be associated with different git worktrees, for example, and each
 will have its own git panel shown its own git status.
 
+Edge cases:
+- If I open a LLM Coding session from the kanban board with a card that's
+  associated with a git worktree, the git panel should show the git status
+  of that work tree. If I then click on one of the buttons in the top right
+  that launch a coding agent, those launch in the project root (not a git
+  worktree), so the git panel should show the git status of the project root
+  when that tab is focused.
+
 By default, projects are not "active", and so the main pane will show a list
 of tabs, one for each markdown file found in the project root, with the
 README.md file shown first (if present), and then with all subsequent
