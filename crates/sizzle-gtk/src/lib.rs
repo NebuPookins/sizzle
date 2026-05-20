@@ -3,7 +3,7 @@ pub mod terminal;
 pub mod kanban;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -197,15 +197,23 @@ fn build_ui(app: &Application) {
         .halign(gtk4::Align::Start)
         .build();
     mem_agent_lbl.add_css_class("mem-sublabel");
+    let mem_terminal_lbl = Label::builder()
+        .label("")
+        .halign(gtk4::Align::Start)
+        .build();
+    mem_terminal_lbl.add_css_class("mem-sublabel");
     let mem_vbox = GtkBox::new(Orientation::Vertical, 0);
     mem_vbox.append(&mem_total_lbl);
     mem_vbox.append(&mem_app_lbl);
     mem_vbox.append(&mem_agent_lbl);
+    mem_vbox.append(&mem_terminal_lbl);
 
     // Hide the memory box until we have data
     let mem_sep = gtk4::Separator::new(Orientation::Horizontal);
     mem_sep.set_margin_start(4);
     mem_sep.set_margin_end(4);
+    mem_vbox.set_tooltip_text(Some("Click for per-project memory breakdown"));
+    mem_vbox.set_cursor_from_name(Some("pointer"));
     mem_vbox.set_visible(false);
     mem_sep.set_visible(false);
 
@@ -272,6 +280,40 @@ fn build_ui(app: &Application) {
         status_dots: Rc::new(RefCell::new(Vec::new())),
         kanban_board: Some(kanban_board),
     }));
+
+    {
+        let mem_popover = Popover::new();
+        mem_popover.set_parent(&mem_vbox);
+
+        let mem_breakdown_view = TextView::new();
+        mem_breakdown_view.set_editable(false);
+        mem_breakdown_view.set_cursor_visible(false);
+        mem_breakdown_view.set_monospace(true);
+        mem_breakdown_view.set_wrap_mode(WrapMode::None);
+
+        let mem_scroll = ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Automatic)
+            .vscrollbar_policy(gtk4::PolicyType::Automatic)
+            .min_content_width(560)
+            .min_content_height(280)
+            .build();
+        mem_scroll.set_child(Some(&mem_breakdown_view));
+        mem_popover.set_child(Some(&mem_scroll));
+
+        let state = state.clone();
+        let mem_popover = mem_popover.clone();
+        let mem_breakdown_view = mem_breakdown_view.clone();
+        let click = GestureClick::new();
+        click.connect_pressed(move |_, _, _, _| {
+            let text = {
+                let st = state.borrow();
+                format_project_mem_breakdown(&st)
+            };
+            mem_breakdown_view.buffer().set_text(&text);
+            mem_popover.popup();
+        });
+        mem_vbox.add_controller(click);
+    }
 
     // Set up kanban agent launch callback.
     state.borrow().kanban_board.as_ref().unwrap().set_on_launch_agent({
@@ -471,13 +513,15 @@ fn build_ui(app: &Application) {
             }
         }
 
-        if let Some((app_kb, agent_kb)) = read_mem_breakdown() {
-            let total_mb = (app_kb + agent_kb) / 1024;
-            let app_mb = app_kb / 1024;
-            let agent_mb = agent_kb / 1024;
+        if let Some(mem) = read_mem_breakdown() {
+            let total_mb = mem.total_kb() / 1024;
+            let app_mb = mem.sizzle_kb / 1024;
+            let agent_mb = mem.agent_kb / 1024;
+            let terminal_mb = mem.terminal_app_kb / 1024;
             mem_total_lbl.set_text(&format!("Memory   Total: {} MB", total_mb));
-            mem_app_lbl.set_text(&format!("App      {} MB", app_mb));
+            mem_app_lbl.set_text(&format!("Sizzle   {} MB", app_mb));
             mem_agent_lbl.set_text(&format!("Agents   {} MB", agent_mb));
+            mem_terminal_lbl.set_text(&format!("Child    {} MB", terminal_mb));
             mem_sep.set_visible(true);
             mem_vbox.set_visible(true);
         }
@@ -3031,15 +3075,28 @@ fn show_agent_preset_dialog(
 
 // ── Memory usage ──────────────────────────────────────────────────────────
 
-fn process_rss_kb(pid: u32) -> Option<u64> {
+fn process_status(pid: u32) -> Option<(u32, u64)> {
     let content = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let mut ppid = None;
+    let mut rss_kb = None;
     for line in content.lines() {
-        if line.starts_with("VmRSS:") {
-            let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
-            return Some(kb);
+        if line.starts_with("PPid:") {
+            ppid = line
+                .split_whitespace()
+                .nth(1)
+                .and_then(|value| value.parse::<u32>().ok());
+        } else if line.starts_with("VmRSS:") {
+            rss_kb = line
+                .split_whitespace()
+                .nth(1)
+                .and_then(|value| value.parse::<u64>().ok());
+        }
+
+        if ppid.is_some() && rss_kb.is_some() {
+            break;
         }
     }
-    None
+    Some((ppid?, rss_kb.unwrap_or(0)))
 }
 
 fn process_cmdline(pid: u32) -> String {
@@ -3054,72 +3111,281 @@ fn process_cmdline(pid: u32) -> String {
         .join(" ")
 }
 
-/// Walk /proc to find all descendants of the current process and sum their RSS,
-/// categorized as "app" (main process + non-agent children) and "LLM agents"
-/// (claude, codex processes spawned by terminals).
-fn read_mem_breakdown() -> Option<(u64, u64)> {
-    let current_pid = std::process::id();
-    let mut all_pids = Vec::new();
-    let entries = std::fs::read_dir("/proc").ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if let Some(pid_str) = name.to_str() {
-            if let Ok(pid) = pid_str.parse::<u32>() {
-                all_pids.push(pid);
-            }
+struct ProcessSnapshot {
+    parent: HashMap<u32, u32>,
+    children: HashMap<u32, Vec<u32>>,
+    rss_kb: HashMap<u32, u64>,
+    cmdline: HashMap<u32, String>,
+}
+
+impl ProcessSnapshot {
+    fn read() -> Option<Self> {
+        let mut parent = HashMap::new();
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut rss_kb = HashMap::new();
+        let mut cmdline = HashMap::new();
+
+        let entries = std::fs::read_dir("/proc").ok()?;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(pid_str) = name.to_str() else {
+                continue;
+            };
+            let Ok(pid) = pid_str.parse::<u32>() else {
+                continue;
+            };
+            let Some((ppid, rss)) = process_status(pid) else {
+                continue;
+            };
+
+            parent.insert(pid, ppid);
+            children.entry(ppid).or_default().push(pid);
+            rss_kb.insert(pid, rss);
+            cmdline.insert(pid, process_cmdline(pid));
         }
+
+        Some(Self {
+            parent,
+            children,
+            rss_kb,
+            cmdline,
+        })
     }
 
-    // Build parent→children map
-    let mut children: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
-    for &pid in &all_pids {
-        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
-            continue;
-        };
-        for line in status.lines() {
-            if line.starts_with("PPid:") {
-                if let Some(ppid_str) = line.split_whitespace().nth(1) {
-                    if let Ok(ppid) = ppid_str.parse::<u32>() {
-                        children.entry(ppid).or_default().push(pid);
-                    }
-                }
-                break;
-            }
-        }
+    fn rss_kb(&self, pid: u32) -> Option<u64> {
+        self.rss_kb.get(&pid).copied()
     }
 
-    // Collect all descendants of the current process
-    let mut descendants = Vec::new();
-    let mut stack = vec![current_pid];
-    while let Some(pid) = stack.pop() {
-        if let Some(kids) = children.get(&pid) {
-            for &child in kids {
-                descendants.push(child);
-                stack.push(child);
-            }
-        }
+    fn cmdline(&self, pid: u32) -> &str {
+        self.cmdline.get(&pid).map(|s| s.as_str()).unwrap_or("")
     }
+}
 
-    let mut app_kb = match process_rss_kb(current_pid) {
-        Some(kb) => kb,
-        None => return None,
-    };
-    let mut agent_kb = 0u64;
+#[derive(Clone, Copy)]
+struct MemBreakdown {
+    sizzle_kb: u64,
+    agent_kb: u64,
+    terminal_app_kb: u64,
+}
 
-    for &pid in &descendants {
-        let Some(rss) = process_rss_kb(pid) else {
-            continue;
-        };
-        let cmdline = process_cmdline(pid);
-        let lower = cmdline.to_lowercase();
-        if lower.contains("claude") || lower.contains("codex") {
-            agent_kb += rss;
+impl MemBreakdown {
+    fn total_kb(&self) -> u64 {
+        self.sizzle_kb + self.agent_kb + self.terminal_app_kb
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DescendantMemBucket {
+    Agent,
+    TerminalApp,
+}
+
+fn is_agent_process(cmdline: &str) -> bool {
+    let lower = cmdline.to_lowercase();
+    lower.contains("claude") || lower.contains("codex")
+}
+
+fn accumulate_descendant_memory(
+    snapshot: &ProcessSnapshot,
+    root_pid: u32,
+    root_bucket: DescendantMemBucket,
+    agent_kb: &mut u64,
+    terminal_app_kb: &mut u64,
+) {
+    let mut stack = vec![(root_pid, root_bucket)];
+
+    while let Some((pid, inherited_bucket)) = stack.pop() {
+        let bucket = if inherited_bucket == DescendantMemBucket::Agent
+            || is_agent_process(snapshot.cmdline(pid))
+        {
+            DescendantMemBucket::Agent
         } else {
-            app_kb += rss;
+            DescendantMemBucket::TerminalApp
+        };
+
+        let rss = snapshot.rss_kb(pid).unwrap_or(0);
+        match bucket {
+            DescendantMemBucket::Agent => *agent_kb += rss,
+            DescendantMemBucket::TerminalApp => *terminal_app_kb += rss,
+        }
+
+        if let Some(kids) = snapshot.children.get(&pid) {
+            for &child in kids {
+                stack.push((child, bucket));
+            }
+        }
+    }
+}
+
+/// Walk /proc to find descendants of the current process and sum their RSS.
+/// The Sizzle process itself is kept separate from anything launched inside a
+/// terminal pane. Agent subtrees are also separated from other terminal apps
+/// such as dev servers, browsers, editors, and build tools.
+fn read_mem_breakdown() -> Option<MemBreakdown> {
+    let current_pid = std::process::id();
+    let snapshot = ProcessSnapshot::read()?;
+    let sizzle_kb = snapshot.rss_kb(current_pid)?;
+    let mut agent_kb = 0u64;
+    let mut terminal_app_kb = 0u64;
+
+    if let Some(kids) = snapshot.children.get(&current_pid) {
+        for &child in kids {
+            accumulate_descendant_memory(
+                &snapshot,
+                child,
+                DescendantMemBucket::TerminalApp,
+                &mut agent_kb,
+                &mut terminal_app_kb,
+            );
         }
     }
 
-    Some((app_kb, agent_kb))
+    Some(MemBreakdown {
+        sizzle_kb,
+        agent_kb,
+        terminal_app_kb,
+    })
+}
+
+struct ProjectMemBreakdown {
+    name: String,
+    agent_kb: u64,
+    terminal_app_kb: u64,
+}
+
+impl ProjectMemBreakdown {
+    fn total_kb(&self) -> u64 {
+        self.agent_kb + self.terminal_app_kb
+    }
+}
+
+fn read_project_mem_breakdowns(state: &AppState) -> Option<Vec<ProjectMemBreakdown>> {
+    let current_pid = std::process::id();
+    let project_roots = state
+        .project_widgets
+        .iter()
+        .map(|(path, pw)| {
+            let name = state
+                .projects
+                .iter()
+                .find(|project| project.path == *path)
+                .map(|project| project.name.clone())
+                .unwrap_or_else(|| {
+                    std::path::Path::new(path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(path)
+                        .to_string()
+                });
+            let pids = pw
+                .borrow()
+                .terminals
+                .iter()
+                .filter(|terminal| terminal.is_alive())
+                .map(|terminal| terminal.child_pid())
+                .collect::<Vec<_>>();
+            (name, pids)
+        })
+        .collect::<Vec<_>>();
+
+    let snapshot = ProcessSnapshot::read()?;
+    let mut rows = Vec::new();
+
+    for (name, pids) in project_roots {
+        let mut seen = HashSet::new();
+        let mut agent_kb = 0u64;
+        let mut terminal_app_kb = 0u64;
+
+        for pid in pids {
+            if !seen.insert(pid) || snapshot.parent.get(&pid).copied() != Some(current_pid) {
+                continue;
+            }
+            accumulate_descendant_memory(
+                &snapshot,
+                pid,
+                DescendantMemBucket::TerminalApp,
+                &mut agent_kb,
+                &mut terminal_app_kb,
+            );
+        }
+
+        if agent_kb + terminal_app_kb > 0 {
+            rows.push(ProjectMemBreakdown {
+                name,
+                agent_kb,
+                terminal_app_kb,
+            });
+        }
+    }
+
+    rows.sort_by(|a, b| {
+        b.total_kb()
+            .cmp(&a.total_kb())
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Some(rows)
+}
+
+fn format_project_mem_breakdown(state: &AppState) -> String {
+    let Some(rows) = read_project_mem_breakdowns(state) else {
+        return "Per-project memory unavailable.\n/proc could not be read.".to_string();
+    };
+
+    if rows.is_empty() {
+        return "No active terminal child processes are currently attached to projects."
+            .to_string();
+    }
+
+    let total_agent_kb: u64 = rows.iter().map(|row| row.agent_kb).sum();
+    let total_terminal_kb: u64 = rows.iter().map(|row| row.terminal_app_kb).sum();
+    let total_kb = total_agent_kb + total_terminal_kb;
+
+    let mut output = String::new();
+    output.push_str("Per-project child memory (RSS)\n\n");
+    output.push_str(&format!(
+        "{:<30} {:>9} {:>9} {:>10}\n",
+        "Project", "Total", "Agents", "Child apps"
+    ));
+    output.push_str(&format!(
+        "{:<30} {:>9} {:>9} {:>10}\n",
+        "------------------------------", "---------", "---------", "----------"
+    ));
+    output.push_str(&format!(
+        "{:<30} {:>9} {:>9} {:>10}\n",
+        "All projects",
+        mem_mb(total_kb),
+        mem_mb(total_agent_kb),
+        mem_mb(total_terminal_kb)
+    ));
+
+    for row in rows {
+        output.push_str(&format!(
+            "{:<30} {:>9} {:>9} {:>10}\n",
+            truncate_label(&row.name, 30),
+            mem_mb(row.total_kb()),
+            mem_mb(row.agent_kb),
+            mem_mb(row.terminal_app_kb)
+        ));
+    }
+
+    output.push_str("\nChild apps are terminal-launched non-agent processes.");
+    output
+}
+
+fn mem_mb(kb: u64) -> String {
+    format!("{} MB", kb / 1024)
+}
+
+fn truncate_label(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    if max_chars <= 3 {
+        return value.chars().take(max_chars).collect();
+    }
+    let mut truncated = value.chars().take(max_chars - 3).collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 // ── Move/Rename Project ──────────────────────────────────────────────────

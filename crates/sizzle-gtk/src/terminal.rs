@@ -95,6 +95,7 @@ pub struct TerminalWidget {
     da: DrawingArea,
     term: Arc<FairMutex<Term<DirtyFlag>>>,
     sender: EventLoopSender,
+    child_pid: u32,
     dirty: Arc<AtomicBool>,
     cols: Arc<AtomicUsize>,
     rows: Arc<AtomicUsize>,
@@ -138,6 +139,7 @@ impl TerminalWidget {
         };
 
         let pty = tty::new(&pty_opts, win_size, 0).expect("PTY failed");
+        let child_pid = pty.child().id();
         let ev_loop = EventLoop::new(term.clone(), dirty_flag.clone(), pty, false, false)
             .expect("EventLoop failed");
         let sender = ev_loop.channel();
@@ -177,6 +179,7 @@ impl TerminalWidget {
             da,
             term,
             sender,
+            child_pid,
             dirty,
             cols: cols_a,
             rows: rows_a,
@@ -615,6 +618,11 @@ impl TerminalWidget {
     /// Once the child exits or [`shutdown`] is called this returns `false`.
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    /// Process ID for the root child process attached to this PTY.
+    pub fn child_pid(&self) -> u32 {
+        self.child_pid
     }
 
     /// Returns a shared reference to the timestamp of the last PTY output.
