@@ -32,10 +32,10 @@ struct ProjectWidgets {
     /// tabs).  Used by `populate_list` to determine whether the green dot
     /// should be drawn — checking [`terminal::TerminalWidget::is_alive`]
     /// directly eliminates the possibility of counter drift.
-    terminals: Vec<terminal::TerminalWidget>,
+    terminals: Vec<terminal::TerminalHandle>,
     /// The terminal that was most recently focused, restored when switching
     /// back to the project.
-    focus_terminal: Option<terminal::TerminalWidget>,
+    focus_terminal: Option<terminal::TerminalHandle>,
     /// The notebook where agent/shell terminal tabs are added.
     notebook: Notebook,
     /// Maps each notebook page (child widget) to the git worktree path whose
@@ -56,7 +56,8 @@ struct ShellTab {
 #[derive(Clone)]
 struct ShellTabContext {
     working_dir: String,
-    agent: terminal::TerminalWidget,
+    agent: terminal::TerminalHandle,
+    agent_terminal: Rc<RefCell<Option<terminal::TerminalWidget>>>,
     shell_stack: Stack,
     tab_box: GtkBox,
     /// Per-project widget handle — focus handlers use this instead of global
@@ -2238,10 +2239,11 @@ fn launch_terminals(
     state: &State,
 ) -> (terminal::TerminalWidget, gtk4::Paned) {
     let agent = terminal::TerminalWidget::new(Some(working_dir), agent_cmd);
+    let agent_handle = agent.handle();
     let repopulate = state.borrow().repopulate.clone();
     // Register the agent terminal so `populate_list` can draw a green dot.
     if let Some(pw) = state.borrow().project_widgets.get(project_path) {
-        pw.borrow_mut().terminals.push(agent.clone());
+        pw.borrow_mut().terminals.push(agent_handle.clone());
     }
 
     {
@@ -2306,7 +2308,8 @@ fn launch_terminals(
 
     let ctx = ShellTabContext {
         working_dir: working_dir.to_string(),
-        agent: agent.clone(),
+        agent: agent_handle.clone(),
+        agent_terminal: Rc::new(RefCell::new(Some(agent.clone()))),
         shell_stack,
         tab_box: middle_bar,
         pw,
@@ -2367,7 +2370,7 @@ fn launch_terminals(
 
     // Store the focused terminal for focus memory restoration when switching back.
     if let Some(pw) = state.borrow().project_widgets.get(project_path) {
-        pw.borrow_mut().focus_terminal = Some(agent.clone());
+        pw.borrow_mut().focus_terminal = Some(agent_handle);
     }
 
     (agent, vpaned)
@@ -2382,12 +2385,13 @@ fn add_shell_tab(ctx: &ShellTabContext, focus: bool) -> terminal::TerminalWidget
     ctx.next_shell_id.set(id + 1);
 
     let shell = terminal::TerminalWidget::new(Some(&ctx.working_dir), None);
+    let shell_handle = shell.handle();
     let child_name = shell_child_name(id);
     ctx.shell_stack
         .add_named(&shell.container, Some(&child_name));
 
     // Register the shell terminal so `populate_list` can draw a green dot.
-    ctx.pw.borrow_mut().terminals.push(shell.clone());
+    ctx.pw.borrow_mut().terminals.push(shell_handle);
 
     {
         let repopulate = ctx.repopulate.clone();
@@ -2444,11 +2448,13 @@ fn activate_shell_tab(ctx: &ShellTabContext, shell_id: usize, grab_focus: bool) 
         .set_visible_child_name(&shell_child_name(shell_id));
 
     let mut active_terminal = None;
+    let mut focus_terminal = None;
     for shell in ctx.shells.borrow().iter() {
         let is_active = shell.id == shell_id;
         shell.terminal.set_focused(is_active);
         if is_active {
-            active_terminal = Some(shell.terminal.clone());
+            active_terminal = Some(shell.terminal.handle());
+            focus_terminal = Some(shell.terminal.clone());
         }
     }
     ctx.agent.set_focused(false);
@@ -2459,7 +2465,7 @@ fn activate_shell_tab(ctx: &ShellTabContext, shell_id: usize, grab_focus: bool) 
         refresh_shell_tab_bar(ctx);
     }
     if grab_focus {
-        if let Some(terminal) = active_terminal {
+        if let Some(terminal) = focus_terminal {
             terminal.focus();
         }
     }
@@ -2572,15 +2578,28 @@ fn refresh_shell_tab_bar(ctx: &ShellTabContext) {
 }
 
 fn shutdown_terminal_tab(ctx: &ShellTabContext) {
-    ctx.agent.shutdown();
+    if let Some(agent) = ctx.agent_terminal.borrow_mut().take() {
+        agent.shutdown();
+    }
     // Agent set_on_exit already sets repopulate; the explicit signal here
     // covers the case where shutdown() doesn't trigger a ChildExit event.
     ctx.repopulate.store(true, Ordering::Release);
 
-    let shells = ctx.shells.borrow().clone();
+    let shells = {
+        let mut shells = ctx.shells.borrow_mut();
+        std::mem::take(&mut *shells)
+    };
     for shell in shells {
         shell.terminal.shutdown();
     }
+
+    while let Some(child) = ctx.tab_box.first_child() {
+        ctx.tab_box.remove(&child);
+    }
+
+    let mut pw = ctx.pw.borrow_mut();
+    pw.focus_terminal = None;
+    pw.terminals.retain(|terminal| terminal.is_alive());
 }
 
 // ── Git status view ────────────────────────────────────────────────────────

@@ -26,6 +26,8 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 pub const CELL_W: f64 = 8.0;
 pub const CELL_H: f64 = 17.0;
 const FONT_PT: f64 = 11.0;
+const DEFAULT_SCROLLBACK_LINES: usize = 500;
+const MAX_SCROLLBACK_LINES: usize = 10_000;
 const SEL_BG: (f64, f64, f64) = (0.30, 0.30, 0.65);
 const SEL_FG: (f64, f64, f64) = (0.95, 0.95, 1.0);
 
@@ -44,6 +46,14 @@ impl Dimensions for TermSize {
     fn columns(&self) -> usize {
         self.cols
     }
+}
+
+fn scrollback_lines() -> usize {
+    std::env::var("SIZZLE_TERMINAL_SCROLLBACK")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.min(MAX_SCROLLBACK_LINES))
+        .unwrap_or(DEFAULT_SCROLLBACK_LINES)
 }
 
 #[derive(Clone)]
@@ -90,6 +100,42 @@ impl EventListener for DirtyFlag {
 }
 
 #[derive(Clone)]
+pub struct TerminalHandle {
+    da: glib::WeakRef<DrawingArea>,
+    last_activity: Arc<Mutex<Option<Instant>>>,
+    focused: Arc<AtomicBool>,
+    alive: Arc<AtomicBool>,
+    child_pid: u32,
+}
+
+impl TerminalHandle {
+    pub fn focus(&self) {
+        if let Some(da) = self.da.upgrade() {
+            da.grab_focus();
+        }
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
+    }
+
+    pub fn last_activity(&self) -> Arc<Mutex<Option<Instant>>> {
+        self.last_activity.clone()
+    }
+
+    pub fn set_focused(&self, focused: bool) {
+        self.focused.store(focused, Ordering::Release);
+        if let Some(da) = self.da.upgrade() {
+            da.queue_draw();
+        }
+    }
+
+    pub fn child_pid(&self) -> u32 {
+        self.child_pid
+    }
+}
+
+#[derive(Clone)]
 pub struct TerminalWidget {
     pub container: gtk4::Box,
     da: DrawingArea,
@@ -111,6 +157,7 @@ impl TerminalWidget {
     pub fn new(working_dir: Option<&str>, command: Option<String>) -> Self {
         let cols = 80usize;
         let rows = 24usize;
+        let scrolling_history = scrollback_lines();
 
         let dirty_flag = DirtyFlag::new();
         let dirty = dirty_flag.dirty.clone();
@@ -123,7 +170,7 @@ impl TerminalWidget {
         };
 
         let term = Arc::new(FairMutex::new(Term::new(
-            Config { scrolling_history: 1000, ..Config::default() },
+            Config { scrolling_history, ..Config::default() },
             &TermSize { cols, rows },
             dirty_flag.clone(),
         )));
@@ -593,6 +640,16 @@ impl TerminalWidget {
 
     pub fn focus(&self) {
         self.da.grab_focus();
+    }
+
+    pub fn handle(&self) -> TerminalHandle {
+        TerminalHandle {
+            da: self.da.downgrade(),
+            last_activity: self.last_activity.clone(),
+            focused: self.focused.clone(),
+            alive: self.alive.clone(),
+            child_pid: self.child_pid,
+        }
     }
 
     pub fn shutdown(&self) {
