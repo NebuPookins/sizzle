@@ -38,10 +38,12 @@ struct ProjectWidgets {
     focus_terminal: Option<terminal::TerminalWidget>,
     /// The notebook where agent/shell terminal tabs are added.
     notebook: Notebook,
-    /// When an agent session is launched in a git worktree (e.g. from a kanban
-    /// card), this holds the worktree path so the git status panel shows that
-    /// worktree's status rather than the project root's.
-    active_git_path: Option<String>,
+    /// Maps each notebook page (child widget) to the git worktree path whose
+    /// status should be shown when that tab is selected.  `None` means the
+    /// project root is used.  This allows different editor tabs (e.g. terminal
+    /// tabs launched in a git worktree vs. plain markdown tabs) to show the
+    /// correct git status for their working directory.
+    tab_git_paths: HashMap<gtk4::glib::Object, Option<String>>,
 }
 
 #[derive(Clone)]
@@ -300,14 +302,6 @@ fn build_ui(app: &Application) {
                     let (agent, paned) = launch_terminals(
                         &project_path, &working_dir, &tab_label, Some(cmd), &nb, &state,
                     );
-                    // Force immediate git status update to show worktree status
-                    // instead of waiting for the 5-second timer.
-                    if working_dir != project_path {
-                        if let Some(pw) = state.borrow().project_widgets.get(&project_path) {
-                            let pw = pw.borrow();
-                            update_git_status(&working_dir, &pw.git_view);
-                        }
-                    }
                     // Register the session with the kanban board and refresh
                     // so the green dot appears on the card.
                     if let Some(kb) = state.borrow().kanban_board.as_ref() {
@@ -499,8 +493,7 @@ fn build_ui(app: &Application) {
                 if path != "__placeholder__" {
                     if let Some(pw) = st.project_widgets.get(&path) {
                         let pw = pw.borrow();
-                        let git_path = pw.active_git_path.as_deref().unwrap_or(&path);
-                        update_git_status(git_path, &pw.git_view);
+                        update_git_status_for_current_tab(&pw, &path);
                     }
                 }
             }
@@ -1506,6 +1499,7 @@ fn select_project(state: &State, path: &str) {
 
             // ── Notebook with markdown + explorer tabs ────────────────────
             let notebook = Notebook::new();
+            let mut tab_git_paths: HashMap<gtk4::glib::Object, Option<String>> = HashMap::new();
             notebook.set_hexpand(true);
             notebook.set_vexpand(true);
 
@@ -1614,13 +1608,12 @@ fn select_project(state: &State, path: &str) {
                 container.append(&mv.scroll);
 
                 notebook.append_page(&container, Some(&Label::new(Some(&tab_name))));
+                tab_git_paths.insert(container.clone().upcast::<gtk4::glib::Object>(), None);
             }
 
             let explorer = build_explorer_tab(&path);
             notebook.append_page(&explorer, Some(&Label::new(Some("Explorer"))));
-
-            // Open to first markdown tab; fall back to Explorer
-            notebook.set_current_page(Some(0));
+            tab_git_paths.insert(explorer.clone().upcast::<gtk4::glib::Object>(), None);
 
             // ── Launch buttons ─────────────────────────────────────────────
             let btn_box = GtkBox::new(Orientation::Horizontal, 4);
@@ -1740,9 +1733,44 @@ fn select_project(state: &State, path: &str) {
                     terminals: Vec::new(),
                     focus_terminal: None,
                     notebook: notebook.clone(),
-                    active_git_path: None,
+                    tab_git_paths,
                 })),
             );
+
+            // Connect switch-page signal: update git panel when the user
+            // switches to a different editor tab.
+            {
+                let sp_state = state.clone();
+                let sp_path = path.clone();
+                notebook.connect_switch_page(move |_nb, page_child, _page_num| {
+                    let st = sp_state.borrow();
+                    if let Some(pw) = st.project_widgets.get(&sp_path) {
+                        let pw = pw.borrow();
+                        let key = page_child.upcast_ref::<gtk4::glib::Object>();
+                        let git_path = pw.tab_git_paths.get(key)
+                            .and_then(|opt| opt.as_deref())
+                            .unwrap_or(&sp_path);
+                        update_git_status(git_path, &pw.git_view);
+                    }
+                });
+            }
+
+            // Clean up tab_git_paths entries when a page is removed.
+            {
+                let rp_state = state.clone();
+                let rp_path = path.clone();
+                notebook.connect_page_removed(move |_nb, child, _page_num| {
+                    if let Some(st) = rp_state.try_borrow().ok() {
+                        if let Some(pw) = st.project_widgets.get(&rp_path) {
+                            let key: &gtk4::glib::Object = child.upcast_ref();
+                            pw.borrow_mut().tab_git_paths.remove(key);
+                        }
+                    }
+                });
+            }
+
+            // Open to first markdown tab; fall back to Explorer
+            notebook.set_current_page(Some(0));
         }
     }
 
@@ -1755,8 +1783,7 @@ fn select_project(state: &State, path: &str) {
         st.project_stack.set_visible_child_name(&path);
         if let Some(pw) = st.project_widgets.get(&path) {
             let pw = pw.borrow();
-            let git_path = pw.active_git_path.as_deref().unwrap_or(&path);
-            update_git_status(git_path, &pw.git_view);
+            update_git_status_for_current_tab(&pw, &path);
         }
         st.store.set_last_launched(&path);
         if let Some(project) = st.projects.iter().find(|p| p.path == path) {
@@ -2172,14 +2199,6 @@ fn launch_terminals(
     if let Some(pw) = state.borrow().project_widgets.get(project_path) {
         pw.borrow_mut().terminals.push(agent.clone());
     }
-    // When the working directory differs from the project path (e.g. launching
-    // an agent in a kanban card's git worktree), set the active_git_path so the
-    // git status panel shows the worktree's status instead of the project root.
-    if project_path != working_dir {
-        if let Some(pw) = state.borrow().project_widgets.get(project_path) {
-            pw.borrow_mut().active_git_path = Some(working_dir.to_string());
-        }
-    }
 
     {
         let repopulate = repopulate.clone();
@@ -2277,6 +2296,16 @@ fn launch_terminals(
     tab_header.append(&close_btn);
 
     let tab_idx = notebook.append_page(&vpaned, Some(&tab_header));
+    // Record the git path for this tab so the switch-page handler shows the
+    // correct git status when this tab is selected.
+    let tab_git_path = if project_path != working_dir {
+        Some(working_dir.to_string())
+    } else {
+        None
+    };
+    if let Some(pw) = state.borrow().project_widgets.get(project_path) {
+        pw.borrow_mut().tab_git_paths.insert(vpaned.clone().upcast::<gtk4::glib::Object>(), tab_git_path);
+    }
     notebook.set_current_page(Some(tab_idx));
 
     // Close button removes the terminal tab and shuts down its active PTYs.
@@ -2536,6 +2565,20 @@ fn add_git_tag(buf: &gtk4::TextBuffer, name: &str, prop: &str, val: &str) {
     let tag = gtk4::TextTag::new(Some(name));
     tag.set_property(prop, val);
     buf.tag_table().add(&tag);
+}
+
+/// Update the git panel to show the status for the currently selected notebook
+/// tab's associated git path.  Falls back to `project_path` when the tab has no
+/// specific worktree path set.
+fn update_git_status_for_current_tab(pw: &ProjectWidgets, project_path: &str) {
+    let git_path = pw.notebook.current_page()
+        .and_then(|page| pw.notebook.nth_page(Some(page)))
+        .and_then(|c| {
+            let key: &gtk4::glib::Object = c.upcast_ref();
+            pw.tab_git_paths.get(key).and_then(|opt| opt.clone())
+        })
+        .unwrap_or_else(|| project_path.to_string());
+    update_git_status(&git_path, &pw.git_view);
 }
 
 fn update_git_status(path: &str, view: &TextView) {

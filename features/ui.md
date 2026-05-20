@@ -9,6 +9,11 @@ also changes to show the git state of that project, namely what branch we are
 currently on, how many commits have not yet been pushed up stream, what files
 are modified, staged, untracked, etc.
 
+Note that the git panel should be associated no with the project, but with a
+editor tab of the project. It's possible for different editor tabs within a
+project to be associated with different git worktrees, for example, and each
+will have its own git panel shown its own git status.
+
 By default, projects are not "active", and so the main pane will show a list
 of tabs, one for each markdown file found in the project root, with the
 README.md file shown first (if present), and then with all subsequent
