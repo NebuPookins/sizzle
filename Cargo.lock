@@ -1671,6 +1671,7 @@ name = "sizzle-gtk"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "chrono",
  "env_logger",
  "gtk4",
  "log",

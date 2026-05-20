@@ -5,8 +5,8 @@
 The kanban board is a project management view that shows work items ("cards")
 organized as a matrix. The columns represent workflow stages, and the rows
 (lanes) are the user's projects. The user can move cards between columns, assign
-them to specific LLM agents, and Sizzle will track each agent's capacity so work
-gets distributed automatically.
+them to specific LLM agents, and Sizzle will track each agent's capacity so it
+can mark when a card is blocked due to an agent being over capacity.
 
 ## The Board View
 

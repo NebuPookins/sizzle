@@ -9,12 +9,13 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use chrono::{Datelike, TimeZone, Timelike};
 use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, DropDown, DrawingArea, Entry, GestureClick, Label, Popover,
-    ScrolledWindow, StringList, TextView,
+    Box as GtkBox, Button, Calendar, DropDown, DrawingArea, Entry, GestureClick, Label, Popover,
+    ScrolledWindow, SpinButton, StringList, TextView,
     CheckButton, Window,
 };
 use gtk4::gdk::DragAction;
@@ -422,9 +423,14 @@ impl KanbanBoardWidget {
 
         // ── Block indicator ─────────────────────────────────────────────────
         if let Some(ref agent) = card.assigned_agent {
-            if self.board.borrow().is_agent_blocked(agent).is_some() {
+            if let Some(blocked_ts) = self.board.borrow().is_agent_blocked(agent) {
+                let time_str = chrono::Local
+                    .timestamp_millis_opt(blocked_ts)
+                    .unwrap()
+                    .format("%a %I:%M %p")
+                    .to_string();
                 let block_lbl = Label::builder()
-                    .label("⏸ blocked")
+                    .label(format!("⏸ blocked until {}", time_str))
                     .halign(gtk4::Align::Start)
                     .css_classes(["kanban-card-blocked"])
                     .build();
@@ -839,6 +845,12 @@ impl KanbanBoardWidget {
         let card_id = card_id.to_string();
         let column_id = column_id.to_string();
 
+        // Check if card has an assigned agent (for capacity menu item).
+        let card_agent: Option<String> = {
+            let board = self.board.borrow();
+            board.get_card(&card_id).and_then(|c| c.assigned_agent.clone())
+        };
+
         let gesture = GestureClick::new();
         gesture.set_button(3);
 
@@ -961,6 +973,14 @@ impl KanbanBoardWidget {
             .halign(gtk4::Align::Start)
             .css_classes(["context-menu-item"])
             .build();
+        let cap_btn2 = card_agent.clone().map(|_| {
+            Button::builder()
+                .label("Report over capacity…")
+                .has_frame(false)
+                .halign(gtk4::Align::Start)
+                .css_classes(["context-menu-item"])
+                .build()
+        });
         let del_btn2 = Button::builder()
             .label("Delete")
             .has_frame(false)
@@ -972,6 +992,9 @@ impl KanbanBoardWidget {
         vbox2.append(&dup_btn2);
         vbox2.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
         vbox2.append(&run_btn2);
+        if let Some(ref cap_btn) = cap_btn2 {
+            vbox2.append(cap_btn);
+        }
         vbox2.append(&del_btn2);
 
         popover2.set_child(Some(&vbox2));
@@ -1051,6 +1074,18 @@ impl KanbanBoardWidget {
                 }
             }
         });
+
+        // Report over capacity
+        if let Some(ref cap_btn) = cap_btn2 {
+            let self_cap = self.clone();
+            let agent_label_for_cap = card_agent.clone().unwrap();
+            let pw_cap = parent_window.clone();
+            let pop_close_cap = popover2.clone();
+            cap_btn.connect_clicked(move |_| {
+                pop_close_cap.popdown();
+                self_cap.show_agent_capacity_dialog(&agent_label_for_cap, &pw_cap);
+            });
+        }
 
         // Delete
         let self_del = self.clone();
@@ -1694,6 +1729,187 @@ impl KanbanBoardWidget {
         }
         drop(board);
         self.save_and_refresh(parent_window);
+    }
+
+    // ── Agent capacity dialog ────────────────────────────────────────────────
+
+    /// Show a dialog to report an agent as over capacity and set when it
+    /// will be available again.
+    fn show_agent_capacity_dialog(&self, agent_label: &str, parent_window: &Window) {
+        let agent_label = agent_label.to_string();
+
+        // Load existing block info.
+        let existing_block = {
+            let board = self.board.borrow();
+            board.get_agent_block(&agent_label)
+                .and_then(|ab| ab.blocked_until)
+        };
+
+        let initial_ms = existing_block.unwrap_or_else(|| chrono::Local::now().timestamp_millis());
+        let initial_dt = chrono::Local.timestamp_millis_opt(initial_ms).unwrap();
+
+        let dialog = Window::builder()
+            .title(format!("Agent Capacity — {}", agent_label))
+            .modal(true)
+            .transient_for(parent_window)
+            .default_width(320)
+            .build();
+
+        // ── Agent label ───────────────────────────────────────────────────
+        let agent_lbl = Label::builder()
+            .label(&format!("Report \"{}\" as over capacity until:", agent_label))
+            .halign(gtk4::Align::Start)
+            .wrap(true)
+            .css_classes(["dialog-field-label"])
+            .build();
+        let agent_row = GtkBox::new(gtk4::Orientation::Vertical, 2);
+        agent_row.set_margin_start(12);
+        agent_row.set_margin_end(12);
+        agent_row.set_margin_top(12);
+        agent_row.append(&agent_lbl);
+
+        // ── Calendar ──────────────────────────────────────────────────────
+        let calendar = Calendar::builder()
+            .year(initial_dt.year())
+            .month((initial_dt.month() - 1) as i32)  // Calendar uses 0-indexed months
+            .day(initial_dt.day() as i32)
+            .build();
+
+        // ── Time picker ───────────────────────────────────────────────────
+        let hour_adj = gtk4::Adjustment::new(initial_dt.hour() as f64, 0.0, 23.0, 1.0, 1.0, 0.0);
+        let hour_spin = SpinButton::builder()
+            .adjustment(&hour_adj)
+            .climb_rate(1.0)
+            .numeric(true)
+            .wrap(true)
+            .width_chars(2)
+            .build();
+        let min_adj = gtk4::Adjustment::new(initial_dt.minute() as f64, 0.0, 59.0, 1.0, 5.0, 0.0);
+        let min_spin = SpinButton::builder()
+            .adjustment(&min_adj)
+            .climb_rate(1.0)
+            .numeric(true)
+            .wrap(true)
+            .width_chars(2)
+            .build();
+
+        let time_row = GtkBox::new(gtk4::Orientation::Horizontal, 4);
+        let time_lbl = Label::builder()
+            .label("Time:")
+            .css_classes(["dialog-field-label"])
+            .build();
+        let colon_lbl = Label::builder()
+            .label(":")
+            .build();
+        time_row.append(&time_lbl);
+        time_row.append(&hour_spin);
+        time_row.append(&colon_lbl);
+        time_row.append(&min_spin);
+        time_row.set_margin_start(12);
+        time_row.set_margin_end(12);
+        time_row.set_margin_top(8);
+
+        // ── Current block info ────────────────────────────────────────────
+        let info_lbl = Label::builder()
+            .label(if existing_block.is_some() {
+                format!("Currently blocked until {}",
+                    initial_dt.format("%a %b %e, %I:%M %p"))
+            } else {
+                "Not currently blocked.".to_string()
+            })
+            .halign(gtk4::Align::Start)
+            .wrap(true)
+            .css_classes(["dialog-field-label"])
+            .build();
+        let info_row = GtkBox::new(gtk4::Orientation::Vertical, 2);
+        info_row.set_margin_start(12);
+        info_row.set_margin_end(12);
+        info_row.set_margin_top(8);
+        info_row.set_margin_bottom(8);
+        info_row.append(&info_lbl);
+
+        // ── Buttons ───────────────────────────────────────────────────────
+        let clear_btn = Button::builder()
+            .label("Clear block")
+            .build();
+        let cancel_btn = Button::builder()
+            .label("Cancel")
+            .build();
+        let ok_btn = Button::builder()
+            .label("Set")
+            .css_classes(["suggested-action"])
+            .build();
+
+        let btn_box = GtkBox::new(gtk4::Orientation::Horizontal, 8);
+        btn_box.set_halign(gtk4::Align::End);
+        btn_box.set_margin_start(12);
+        btn_box.set_margin_end(12);
+        btn_box.set_margin_bottom(12);
+
+        if existing_block.is_some() {
+            btn_box.append(&clear_btn);
+        }
+        btn_box.append(&cancel_btn);
+        btn_box.append(&ok_btn);
+
+        // ── Layout ────────────────────────────────────────────────────────
+        let content = GtkBox::new(gtk4::Orientation::Vertical, 0);
+        content.append(&agent_row);
+        content.append(&calendar);
+        content.append(&time_row);
+        content.append(&info_row);
+        content.append(&btn_box);
+        dialog.set_child(Some(&content));
+
+        cancel_btn.connect_clicked({
+            let dc = dialog.clone();
+            move |_| dc.close()
+        });
+
+        // Clear block
+        if existing_block.is_some() {
+            let self_cl = self.clone();
+            let agent_cl = agent_label.clone();
+            let pw_cl = parent_window.clone();
+            let pop_close_cl = dialog.clone();
+            clear_btn.connect_clicked(move |_| {
+                let mut board = self_cl.board.borrow_mut();
+                board.set_agent_block(&agent_cl, None);
+                drop(board);
+                self_cl.save_and_refresh(&pw_cl);
+                pop_close_cl.close();
+            });
+        }
+
+        // OK — set block
+        let self_ok = self.clone();
+        let agent_ok = agent_label.clone();
+        let pw_ok = parent_window.clone();
+        let dialog_ok = dialog.clone();
+        ok_btn.connect_clicked(move |_| {
+            let cal_dt = calendar.date();
+            let y = cal_dt.year();
+            let m = cal_dt.month();     // 1-indexed
+            let d = cal_dt.day_of_month();
+            let h = hour_spin.value() as u32;
+            let min = min_spin.value() as u32;
+            let naive = chrono::NaiveDate::from_ymd_opt(y, m as u32, d as u32)
+                .and_then(|date| date.and_hms_opt(h, min, 0))
+                .expect("invalid date/time from calendar and spin buttons");
+            let ts = chrono::Local
+                .from_local_datetime(&naive)
+                .earliest()
+                .map(|dt| dt.timestamp_millis())
+                .unwrap_or_else(|| chrono::Local::now().timestamp_millis());
+
+            let mut board = self_ok.board.borrow_mut();
+            board.set_agent_block(&agent_ok, Some(ts));
+            drop(board);
+            self_ok.save_and_refresh(&pw_ok);
+            dialog_ok.close();
+        });
+
+        dialog.present();
     }
 
     // ── Persistence ──────────────────────────────────────────────────────────

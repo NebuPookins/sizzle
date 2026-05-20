@@ -120,4 +120,33 @@ impl KanbanBoard {
             .find(|ab| ab.agent_label == agent_label)
             .and_then(|ab| ab.blocked_until.filter(|&ts| ts > now))
     }
+
+    /// Set or clear a block for an agent.
+    /// Pass `None` to clear the block, or `Some(millis)` to set/update it.
+    pub fn set_agent_block(&mut self, agent_label: &str, blocked_until: Option<i64>) {
+        if let Some(block) = self
+            .agent_blocks
+            .iter_mut()
+            .find(|ab| ab.agent_label == agent_label)
+        {
+            match blocked_until {
+                Some(ts) => block.blocked_until = Some(ts),
+                None => {
+                    self.agent_blocks.retain(|ab| ab.agent_label != agent_label);
+                }
+            }
+        } else if let Some(ts) = blocked_until {
+            self.agent_blocks.push(AgentBlock {
+                agent_label: agent_label.to_string(),
+                blocked_until: Some(ts),
+            });
+        }
+    }
+
+    /// Get the block for an agent, if any.
+    pub fn get_agent_block(&self, agent_label: &str) -> Option<&AgentBlock> {
+        self.agent_blocks
+            .iter()
+            .find(|ab| ab.agent_label == agent_label)
+    }
 }
