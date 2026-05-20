@@ -3,11 +3,12 @@
 //! A horizontally scrollable board with columns of cards grouped by project.
 //! Cards can be created, edited, duplicated, deleted, and dragged between columns.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{Datelike, TimeZone, Timelike};
 use gtk4::gdk;
@@ -53,6 +54,8 @@ pub struct KanbanBoardWidget {
     /// Callback to switch focus to an existing session.
     /// Parameters: (project_path, card_id).
     on_focus_session: RefCell<Option<Rc<dyn Fn(String, String)>>>,
+    /// One-shot timer source for the nearest future agent-block expiry.
+    last_expiry_source: Rc<Cell<Option<glib::SourceId>>>,
 }
 
 impl KanbanBoardWidget {
@@ -88,9 +91,11 @@ impl KanbanBoardWidget {
             active_sessions: Rc::new(RefCell::new(HashMap::new())),
             on_launch_agent: RefCell::new(None),
             on_focus_session: RefCell::new(None),
+            last_expiry_source: Rc::new(Cell::new(None)),
         };
 
         widget.refresh_board(&parent_window);
+        widget.reschedule_expiry_timer();
         widget
     }
 
@@ -421,9 +426,10 @@ impl KanbanBoardWidget {
         card_box.add_css_class("kanban-card");
         card_box.append(&inner);
 
-        // ── Block indicator ─────────────────────────────────────────────────
+        // ── Block / Ready indicator ──────────────────────────────────────────
         if let Some(ref agent) = card.assigned_agent {
-            if let Some(blocked_ts) = self.board.borrow().is_agent_blocked(agent) {
+            let board = self.board.borrow();
+            if let Some(blocked_ts) = board.is_agent_blocked(agent) {
                 let time_str = chrono::Local
                     .timestamp_millis_opt(blocked_ts)
                     .unwrap()
@@ -435,6 +441,13 @@ impl KanbanBoardWidget {
                     .css_classes(["kanban-card-blocked"])
                     .build();
                 inner.append(&block_lbl);
+            } else if board.is_agent_recovered(agent) {
+                let ready_lbl = Label::builder()
+                    .label("✓ Ready")
+                    .halign(gtk4::Align::Start)
+                    .css_classes(["kanban-card-ready"])
+                    .build();
+                inner.append(&ready_lbl);
             }
         }
 
@@ -1912,6 +1925,37 @@ impl KanbanBoardWidget {
         dialog.present();
     }
 
+    // ── Expiry timer ───────────────────────────────────────────────────────────
+
+    /// Find the nearest future `blocked_until` and set a one-shot timer to
+    /// refresh the board when it fires.  Cancels any previous timer.
+    fn reschedule_expiry_timer(&self) {
+        // Cancel existing timer.
+        if let Some(id) = self.last_expiry_source.replace(None) {
+            id.remove();
+        }
+
+        let board = self.board.borrow();
+        let now = chrono::Utc::now().timestamp_millis();
+        let nearest = board
+            .agent_blocks
+            .iter()
+            .filter_map(|ab| ab.blocked_until)
+            .filter(|&ts| ts > now)
+            .min();
+
+        if let Some(nearest_ts) = nearest {
+            let delay = (nearest_ts - now) as u64;
+            let self_cl = self.clone();
+            let source = Rc::clone(&self.last_expiry_source);
+            let id = glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+                source.set(None);
+                self_cl.refresh_self();
+            });
+            self.last_expiry_source.set(Some(id));
+        }
+    }
+
     // ── Persistence ──────────────────────────────────────────────────────────
 
     fn save_and_refresh(&self, parent_window: &Window) {
@@ -1919,6 +1963,7 @@ impl KanbanBoardWidget {
         self.store.set_kanban_board(&board);
         drop(board);
         self.refresh_board(parent_window);
+        self.reschedule_expiry_timer();
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

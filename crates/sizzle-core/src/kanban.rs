@@ -149,4 +149,13 @@ impl KanbanBoard {
             .iter()
             .find(|ab| ab.agent_label == agent_label)
     }
+
+    /// Check if an agent has a `blocked_until` timestamp in the past, meaning
+    /// the agent was blocked and has now recovered.
+    pub fn is_agent_recovered(&self, agent_label: &str) -> bool {
+        let now = chrono::Utc::now().timestamp_millis();
+        self.agent_blocks
+            .iter()
+            .any(|ab| ab.agent_label == agent_label && ab.blocked_until.map_or(false, |ts| ts <= now))
+    }
 }

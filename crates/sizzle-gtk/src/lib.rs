@@ -1071,6 +1071,11 @@ fn build_ui(app: &Application) {
              color: #f5a62a;
              margin-top: 2px;
          }
+         .kanban-card-ready {
+             font-size: 10px;
+             color: #50fa7b;
+             margin-top: 2px;
+         }
          .kanban-card-active {
              font-size: 10px;
              color: #50fa7b;
