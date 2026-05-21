@@ -2425,10 +2425,10 @@ fn wire_shell_terminal(ctx: &ShellTabContext, shell: &terminal::TerminalWidget, 
     }
     {
         let ctx = ctx.clone();
+        let shell_owned = shell.clone();
         shell.connect_key_pressed_capture(move |kv, mods| {
             let is_ctrl_w = kv == gdk::Key::w && mods.contains(gdk::ModifierType::CONTROL_MASK);
-            let can_close = ctx.shells.borrow().len() > 1;
-            if is_ctrl_w && can_close {
+            if is_ctrl_w && !shell_owned.is_alive() {
                 close_shell_tab(&ctx, shell_id, true);
                 true
             } else {
