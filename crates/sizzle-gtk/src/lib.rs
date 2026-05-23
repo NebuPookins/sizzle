@@ -21,7 +21,7 @@ use gtk4::{
     WrapMode,
 };
 
-use sizzle_core::{scan_projects, AgentPreset, MetadataStore, ScanSettings, ScannedProject};
+use sizzle_core::{scan_projects, AgentPreset, MetadataStore, ProjectMeta, ScanSettings, ScannedProject};
 use crate::kanban::KanbanBoardWidget;
 
 // ── App state ─────────────────────────────────────────────────────────────
@@ -1161,12 +1161,25 @@ fn build_ui(app: &Application) {
 
 // ── Populate the left-pane list ────────────────────────────────────────────
 
-fn marker_sort_key(marker: Option<&str>) -> u8 {
+pub(crate) fn marker_sort_key(marker: Option<&str>) -> u8 {
     match marker {
         Some("favorite") => 0,
         Some("ignored") => 2,
         _ => 1,
     }
+}
+
+/// Shared sort key for consistent project ordering across the UI
+/// (left panel, kanban board dropdown, etc.).
+pub(crate) fn project_sort_key(
+    project: &ScannedProject,
+    meta: Option<&ProjectMeta>,
+    has_active_terminal: bool,
+) -> (bool, u8, std::cmp::Reverse<Option<i64>>, String) {
+    let marker_key = marker_sort_key(meta.and_then(|m| m.marker.as_deref()));
+    let time_key = std::cmp::Reverse(meta.and_then(|m| m.last_launched));
+    let name_key = project.name.to_lowercase();
+    (!has_active_terminal, marker_key, time_key, name_key)
 }
 
 fn format_relative_time(last_ms: i64) -> String {
@@ -1189,8 +1202,6 @@ fn format_relative_time(last_ms: i64) -> String {
 }
 
 fn populate_list(state: &State) {
-    use std::cmp::Reverse;
-
     // Clean up dead terminal references before rebuilding, so the per-project
     // vec doesn't grow unbounded when tabs are closed or processes exit.
     for pw in state.borrow().project_widgets.values() {
@@ -1278,10 +1289,7 @@ fn populate_list(state: &State) {
             .get(&p.path)
             .map_or(false, |pw| pw.borrow().terminals.iter().any(|t| t.is_alive()));
         let meta = all_meta.get(&p.path);
-        let marker_key = marker_sort_key(meta.and_then(|m| m.marker.as_deref()));
-        let time_key = Reverse(meta.and_then(|m| m.last_launched));
-        let name_key = p.name.to_lowercase();
-        (!is_active, marker_key, time_key, name_key)
+        project_sort_key(p, meta, is_active)
     });
 
     for project in sorted {

@@ -599,20 +599,39 @@ impl KanbanBoardWidget {
         desc_row.append(&desc_lbl);
         desc_row.append(&desc_view);
 
-        // ── Project (searchable) ────────────────────────────────────────────
-        let project_names: Vec<String> = {
+        // ── Project (searchable, with icons and substring matching) ─────────
+        let (project_names, display_names): (Vec<String>, Vec<String>) = {
             let projs = self.projects.borrow();
-            let mut names: Vec<String> = projs.iter().map(|p| p.name.clone()).collect();
-            names.sort();
-            names
+            let all_meta = self.store.get_all_metadata();
+            let mut sorted: Vec<&ScannedProject> = projs.iter().collect();
+            sorted.sort_by_key(|p| {
+                let meta = all_meta.get(&p.path);
+                crate::project_sort_key(p, meta, false)
+            });
+            let names: Vec<String> = sorted.iter().map(|p| p.name.clone()).collect();
+            let display: Vec<String> = sorted
+                .iter()
+                .map(|p| {
+                    let meta = all_meta.get(&p.path);
+                    let prefix = match meta.and_then(|m| m.marker.as_deref()) {
+                        Some("favorite") => "\u{2605} ",
+                        Some("ignored") => "\u{1F5D1} ",
+                        _ => "",
+                    };
+                    format!("{}{}", prefix, p.name)
+                })
+                .collect();
+            (names, display)
         };
+
         let project_strings: Vec<&str> = std::iter::once("None")
-            .chain(project_names.iter().map(|s| s.as_str()))
+            .chain(display_names.iter().map(|s| s.as_str()))
             .collect();
         let project_list = StringList::new(&project_strings);
         let project_dropdown = DropDown::builder()
             .model(&project_list)
             .enable_search(true)
+            .search_match_mode(gtk4::StringFilterMatchMode::Substring)
             .build();
         project_dropdown.set_expression(Some(&gtk4::PropertyExpression::new(
             gtk4::StringObject::static_type(),

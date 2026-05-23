@@ -13,7 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 sizzle-core = { path = "../sizzle-core" }
-gtk4 = { version = "0.9", features = ["v4_10"] }
+gtk4 = { version = "0.9", features = ["v4_10", "v4_12"] }
 pangocairo = "0.20"
 alacritty_terminal = "0.26"
 log = "0.4"
