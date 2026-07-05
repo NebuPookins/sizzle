@@ -26,6 +26,24 @@ use crate::kanban::KanbanBoardWidget;
 
 // ── App state ─────────────────────────────────────────────────────────────
 
+enum TabPageMeta {
+    /// A markdown file tab or the Explorer preview pane — has a MarkdownView
+    /// for file-change detection; git status uses the project root.
+    Markdown { md_view: markdown::MarkdownView },
+    /// A terminal tab (agent or shell) — may have a custom git worktree path;
+    /// never has a markdown view.
+    Terminal { git_path: Option<String> },
+}
+
+impl TabPageMeta {
+    fn git_path(&self) -> Option<&str> {
+        match self {
+            TabPageMeta::Markdown { .. } => None,
+            TabPageMeta::Terminal { git_path } => git_path.as_deref(),
+        }
+    }
+}
+
 struct ProjectWidgets {
     git_view: TextView,
     /// All terminal widgets for this project (agent + all shells across all
@@ -38,12 +56,9 @@ struct ProjectWidgets {
     focus_terminal: Option<terminal::TerminalHandle>,
     /// The notebook where agent/shell terminal tabs are added.
     notebook: Notebook,
-    /// Maps each notebook page (child widget) to the git worktree path whose
-    /// status should be shown when that tab is selected.  `None` means the
-    /// project root is used.  This allows different editor tabs (e.g. terminal
-    /// tabs launched in a git worktree vs. plain markdown tabs) to show the
-    /// correct git status for their working directory.
-    tab_git_paths: HashMap<gtk4::glib::Object, Option<String>>,
+    /// Maps each notebook page (child widget) to per-tab metadata: git
+    /// worktree path and optional MarkdownView for file-change detection.
+    tab_meta: HashMap<gtk4::glib::Object, TabPageMeta>,
 }
 
 #[derive(Clone)]
@@ -1557,7 +1572,7 @@ fn select_project(state: &State, path: &str) {
 
             // ── Notebook with markdown + explorer tabs ────────────────────
             let notebook = Notebook::new();
-            let mut tab_git_paths: HashMap<gtk4::glib::Object, Option<String>> = HashMap::new();
+            let mut tab_meta: HashMap<gtk4::glib::Object, TabPageMeta> = HashMap::new();
             notebook.set_hexpand(true);
             notebook.set_vexpand(true);
 
@@ -1661,17 +1676,25 @@ fn select_project(state: &State, path: &str) {
                     mv.view().add_controller(ctrl_key);
                 }
 
+                mv.set_file_path(md_path);
+
                 let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
                 container.append(&toolbar);
                 container.append(&mv.scroll);
 
                 notebook.append_page(&container, Some(&Label::new(Some(&tab_name))));
-                tab_git_paths.insert(container.clone().upcast::<gtk4::glib::Object>(), None);
+                tab_meta.insert(
+                    container.clone().upcast::<gtk4::glib::Object>(),
+                    TabPageMeta::Markdown { md_view: mv.clone() },
+                );
             }
 
-            let explorer = build_explorer_tab(&path);
+            let (explorer, explorer_md) = build_explorer_tab(&path);
             notebook.append_page(&explorer, Some(&Label::new(Some("Explorer"))));
-            tab_git_paths.insert(explorer.clone().upcast::<gtk4::glib::Object>(), None);
+            tab_meta.insert(
+                explorer.clone().upcast::<gtk4::glib::Object>(),
+                TabPageMeta::Markdown { md_view: explorer_md },
+            );
 
             // ── Launch buttons ─────────────────────────────────────────────
             let btn_box = GtkBox::new(Orientation::Horizontal, 4);
@@ -1791,7 +1814,7 @@ fn select_project(state: &State, path: &str) {
                     terminals: Vec::new(),
                     focus_terminal: None,
                     notebook: notebook.clone(),
-                    tab_git_paths,
+                    tab_meta,
                 })),
             );
 
@@ -1805,15 +1828,18 @@ fn select_project(state: &State, path: &str) {
                     if let Some(pw) = st.project_widgets.get(&sp_path) {
                         let pw = pw.borrow();
                         let key = page_child.upcast_ref::<gtk4::glib::Object>();
-                        let git_path = pw.tab_git_paths.get(key)
-                            .and_then(|opt| opt.as_deref())
-                            .unwrap_or(&sp_path);
-                        update_git_status(git_path, &pw.git_view);
+                        if let Some(meta) = pw.tab_meta.get(key) {
+                            let git_path = meta.git_path().unwrap_or(&sp_path);
+                            update_git_status(git_path, &pw.git_view);
+                            if let TabPageMeta::Markdown { md_view } = meta {
+                                md_view.check_and_reload();
+                            }
+                        }
                     }
                 });
             }
 
-            // Clean up tab_git_paths entries when a page is removed.
+            // Clean up tab_meta entries when a page is removed.
             {
                 let rp_state = state.clone();
                 let rp_path = path.clone();
@@ -1821,7 +1847,7 @@ fn select_project(state: &State, path: &str) {
                     if let Some(st) = rp_state.try_borrow().ok() {
                         if let Some(pw) = st.project_widgets.get(&rp_path) {
                             let key: &gtk4::glib::Object = child.upcast_ref();
-                            pw.borrow_mut().tab_git_paths.remove(key);
+                            pw.borrow_mut().tab_meta.remove(key);
                         }
                     }
                 });
@@ -1859,7 +1885,7 @@ fn select_project(state: &State, path: &str) {
 
 // ── Explorer tab ──────────────────────────────────────────────────────────
 
-fn build_explorer_tab(project_root: &str) -> Paned {
+fn build_explorer_tab(project_root: &str) -> (Paned, markdown::MarkdownView) {
     // ── Left: nav bar + file list ──────────────────────────────────────────
     let path_lbl = Label::builder()
         .halign(gtk4::Align::Start)
@@ -2140,7 +2166,7 @@ fn build_explorer_tab(project_root: &str) -> Paned {
         });
     }
 
-    paned
+    (paned, md_view)
 }
 
 fn explorer_load_dir(
@@ -2203,6 +2229,7 @@ fn explorer_show_file(
                 .unwrap_or("")
                 .to_lowercase();
             if matches!(ext.as_str(), "md" | "markdown" | "txt" | "rst") {
+                md_view.set_file_path(file_path);
                 md_view.render(&content);
                 content_stack.set_visible_child_name("markdown");
             } else {
@@ -2364,7 +2391,10 @@ fn launch_terminals(
         None
     };
     if let Some(pw) = state.borrow().project_widgets.get(project_path) {
-        pw.borrow_mut().tab_git_paths.insert(vpaned.clone().upcast::<gtk4::glib::Object>(), tab_git_path);
+        pw.borrow_mut().tab_meta.insert(
+            vpaned.clone().upcast::<gtk4::glib::Object>(),
+            TabPageMeta::Terminal { git_path: tab_git_path },
+        );
     }
     notebook.set_current_page(Some(tab_idx));
 
@@ -2651,7 +2681,7 @@ fn update_git_status_for_current_tab(pw: &ProjectWidgets, project_path: &str) {
         .and_then(|page| pw.notebook.nth_page(Some(page)))
         .and_then(|c| {
             let key: &gtk4::glib::Object = c.upcast_ref();
-            pw.tab_git_paths.get(key).and_then(|opt| opt.clone())
+            pw.tab_meta.get(key).and_then(|m| m.git_path().map(String::from))
         })
         .unwrap_or_else(|| project_path.to_string());
     update_git_status(&git_path, &pw.git_view);

@@ -1,16 +1,21 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::SystemTime;
 
 use gtk4::gdk::Display;
 use gtk4::prelude::*;
 use gtk4::{ScrolledWindow, TextBuffer, TextTag, TextView, WrapMode};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use sizzle_core;
 
 #[derive(Clone)]
 pub struct MarkdownView {
     pub scroll: ScrolledWindow,
     view: TextView,
     source: Rc<RefCell<String>>,
+    /// (path, last-known mtime).  `None` mtime means "never synced" so the
+    /// next `check_and_reload` will always re-read.
+    file_state: Rc<RefCell<Option<(String, Option<SystemTime>)>>>,
 }
 
 impl MarkdownView {
@@ -53,7 +58,12 @@ impl MarkdownView {
             .build();
         scroll.set_child(Some(&view));
 
-        Self { scroll, view, source: Rc::new(RefCell::new(String::new())) }
+        Self {
+            scroll,
+            view,
+            source: Rc::new(RefCell::new(String::new())),
+            file_state: Rc::new(RefCell::new(None)),
+        }
     }
 
     /// Render markdown (view mode). Stores the source for later editing.
@@ -110,6 +120,60 @@ impl MarkdownView {
     /// Update the stored markdown source (e.g. after a successful save).
     pub fn set_source(&self, text: &str) {
         *self.source.borrow_mut() = text.to_string();
+    }
+
+    /// Record the file path this view is displaying, so we can check for
+    /// external changes on tab-switch.
+    pub fn set_file_path(&self, path: &str) {
+        let mtime = std::fs::metadata(path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+        *self.file_state.borrow_mut() = Some((path.to_string(), mtime));
+    }
+
+    /// Re-read the underlying file if its modification time has changed since
+    /// the last render.  Does nothing when the view is in edit mode (so we
+    /// don't clobber the user's unsaved edits).
+    pub fn check_and_reload(&self) {
+        // Clone the file state once so we can check / read without holding a
+        // RefCell borrow across filesystem calls.
+        let state = self.file_state.borrow().clone();
+        let (path, last_mtime) = match state.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+        if self.view.is_editable() {
+            return;
+        }
+        let metadata = match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(_) => {
+                // File disappeared — clear file_state so we don't keep
+                // stat-ing a missing file on every tab switch.
+                *self.file_state.borrow_mut() = None;
+                return;
+            }
+        };
+        let mtime = match metadata.modified() {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        if let Some(last) = last_mtime {
+            if mtime == *last {
+                return;
+            }
+        }
+        match sizzle_core::files::read_markdown_file(path.clone()) {
+            Some(content) => {
+                self.render(&content);
+                *self.file_state.borrow_mut() = Some((path.clone(), Some(mtime)));
+            }
+            None => {
+                // File disappeared between metadata() and read — clear
+                // file_state so we don't keep stat-ing a missing file.
+                *self.file_state.borrow_mut() = None;
+            }
+        }
     }
 }
 
