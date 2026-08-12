@@ -104,6 +104,15 @@ struct AppState {
     status_dots: Rc<RefCell<Vec<DrawingArea>>>,
     /// Kanban board widget, created once in build_ui.
     kanban_board: Option<KanbanBoardWidget>,
+    /// File monitors watching scan root directories. Kept alive to prevent
+    /// them from being dropped (which would stop monitoring).
+    file_monitors: Vec<gtk4::gio::FileMonitor>,
+    /// Pending debounce rescan timer. Canceled when a new change arrives
+    /// before the previous timer fires.
+    rescan_timer_id: Cell<Option<glib::SourceId>>,
+    /// Current search query, stored so `populate_list` can re-apply the
+    /// active filter after rebuilding the project list.
+    search_query: String,
 }
 
 type State = Rc<RefCell<AppState>>;
@@ -295,6 +304,9 @@ fn build_ui(app: &Application) {
         main_window: window.clone().upcast(),
         status_dots: Rc::new(RefCell::new(Vec::new())),
         kanban_board: Some(kanban_board),
+        file_monitors: Vec::new(),
+        rescan_timer_id: Cell::new(None),
+        search_query: String::new(),
     }));
 
     {
@@ -403,50 +415,14 @@ fn build_ui(app: &Application) {
     });
 
     populate_list(&state);
+    setup_file_monitors(&state);
+    start_poll_timer(&state);
 
     {
         let state = state.clone();
         search.connect_changed(move |entry| {
-            let query = entry.text();
-            let query_lower = query.to_lowercase();
-            let case_sensitive = query.chars().any(|c| c.is_uppercase());
-            let st = state.borrow();
-            let mut i = 0;
-            while let Some(row) = st.list_box.row_at_index(i) {
-                let path = row.widget_name();
-                let visible = if path == "__kanban__" || path == "__separator__" {
-                    // Always show kanban entry and its separator.
-                    true
-                } else if query.is_empty() {
-                    true
-                } else {
-                    st.projects
-                        .iter()
-                        .find(|p| p.path == path)
-                        .map_or(false, |p| {
-                            let tag = p
-                                .detected_tags
-                                .first()
-                                .map(|t| t.name.as_str())
-                                .unwrap_or("");
-                            let in_name = if case_sensitive {
-                                p.name.contains(query.as_str())
-                            } else {
-                                p.name.to_lowercase().contains(&query_lower as &str)
-                            };
-                            let in_tag = !tag.is_empty() && (
-                                if case_sensitive {
-                                    tag.contains(query.as_str())
-                                } else {
-                                    tag.to_lowercase().contains(&query_lower as &str)
-                                }
-                            );
-                            in_name || in_tag
-                        })
-                };
-                row.set_visible(visible);
-                i += 1;
-            }
+            state.borrow_mut().search_query = entry.text().to_string();
+            apply_search_filter(&state.borrow());
         });
     }
 
@@ -1216,6 +1192,53 @@ fn format_relative_time(last_ms: i64) -> String {
     }
 }
 
+/// Apply the current search filter text to all rows in the project list.
+/// Sets each row visible or hidden based on whether the project name or
+/// tag matches the query.  Called both when the user types in the search
+/// entry and after `populate_list` rebuilds the list (so the filter
+/// survives rescans).
+fn apply_search_filter(st: &AppState) {
+    let query = st.search_query.clone();
+    let query_lower = query.to_lowercase();
+    let case_sensitive = query.chars().any(|c| c.is_uppercase());
+    let mut i = 0;
+    while let Some(row) = st.list_box.row_at_index(i) {
+        let path = row.widget_name();
+        let visible = if path == "__kanban__" || path == "__separator__" {
+            // Always show kanban entry and its separator.
+            true
+        } else if query.is_empty() {
+            true
+        } else {
+            st.projects
+                .iter()
+                .find(|p| p.path == path)
+                .map_or(false, |p| {
+                    let tag = p
+                        .detected_tags
+                        .first()
+                        .map(|t| t.name.as_str())
+                        .unwrap_or("");
+                    let in_name = if case_sensitive {
+                        p.name.contains(query.as_str())
+                    } else {
+                        p.name.to_lowercase().contains(&query_lower as &str)
+                    };
+                    let in_tag = !tag.is_empty() && (
+                        if case_sensitive {
+                            tag.contains(query.as_str())
+                        } else {
+                            tag.to_lowercase().contains(&query_lower as &str)
+                        }
+                    );
+                    in_name || in_tag
+                })
+        };
+        row.set_visible(visible);
+        i += 1;
+    }
+}
+
 fn populate_list(state: &State) {
     // Clean up dead terminal references before rebuilding, so the per-project
     // vec doesn't grow unbounded when tabs are closed or processes exit.
@@ -1541,6 +1564,12 @@ fn populate_list(state: &State) {
                 populate_list(&state);
             });
         }
+    }
+    // Re-apply any active search filter after rebuilding the list, so the
+    // filter survives rescans triggered by the file monitor or poll timer.
+    // Rows are already visible after a rebuild, so skip the pass when idle.
+    if !st.search_query.is_empty() {
+        apply_search_filter(&st);
     }
     // st (the immutable borrow) is still alive at this point but no longer used.
     // Drop it so we can re-borrow state for the kanban update.
@@ -2750,14 +2779,7 @@ fn pick_folder_and_scan(state: &State, window: &ApplicationWindow) {
         if !settings.scan_roots.contains(&path_str) {
             settings.scan_roots.push(path_str);
         }
-
-        let new_projects = scan_projects(&settings);
-        {
-            let mut st = state.borrow_mut();
-            st.store.set_scan_settings(&settings);
-            st.projects = new_projects;
-        }
-        populate_list(&state);
+        apply_scan_settings(&state, &settings);
     });
 }
 
@@ -2885,13 +2907,7 @@ fn build_settings_path_tab(
             remove_btn.connect_clicked(move |_| {
                 let mut settings = state.borrow().store.get_scan_settings();
                 remove_item(&mut settings, &item);
-                let projects = scan_projects(&settings);
-                {
-                    let mut st = state.borrow_mut();
-                    st.store.set_scan_settings(&settings);
-                    st.projects = projects;
-                }
-                populate_list(&state);
+                apply_scan_settings(&state, &settings);
                 populate(&list_box, &state, get_items, remove_item);
             });
         }
@@ -2927,13 +2943,7 @@ fn build_settings_path_tab(
 
                     let mut settings = state.borrow().store.get_scan_settings();
                     add_item(&mut settings, path_str);
-                    let projects = scan_projects(&settings);
-                    {
-                        let mut st = state.borrow_mut();
-                        st.store.set_scan_settings(&settings);
-                        st.projects = projects;
-                    }
-                    populate_list(&state);
+                    apply_scan_settings(&state, &settings);
                     populate(&list_box, &state, get_items, remove_item);
                 },
             );
@@ -3994,13 +4004,7 @@ fn show_move_rename_confirmation(
             Err(_) => {} // run_execute already showed an error dialog
         }
         // Rescan and refresh
-        let settings = state_c.borrow().store.get_scan_settings();
-        let new_projects = sizzle_core::scan_projects(&settings);
-        {
-            let mut st = state_c.borrow_mut();
-            st.projects = new_projects;
-        }
-        populate_list(&state_c);
+        perform_rescan(&state_c);
     });
 
     win.present();
@@ -4013,11 +4017,157 @@ fn add_to_ignored_roots(state: &State, path: &str) {
     if !settings.ignore_roots.contains(&path.to_string()) {
         settings.ignore_roots.push(path.to_string());
     }
-    let new_projects = sizzle_core::scan_projects(&settings);
-    {
-        let mut st = state.borrow_mut();
-        st.store.set_scan_settings(&settings);
-        st.projects = new_projects;
+    state.borrow_mut().store.set_scan_settings(&settings);
+    perform_rescan(state);
+}
+
+// ── Filesystem watching ────────────────────────────────────────────────────
+
+/// Tear down any existing file monitors and create new ones for every
+/// scan root in the current settings. Non-existent roots are silently
+/// skipped (logged at warn level).
+fn setup_file_monitors(state: &State) {
+    state.borrow_mut().file_monitors.clear();
+
+    let settings = state.borrow().store.get_scan_settings();
+
+    log::info!(
+        "[sizzle] Setting up file monitors for {} scan root(s)",
+        settings.scan_roots.len()
+    );
+
+    for root in &settings.scan_roots {
+        let path = std::path::Path::new(root);
+        if !path.exists() || !path.is_dir() {
+            log::warn!("[sizzle] Cannot watch non-existent scan root: {}", root);
+            continue;
+        }
+
+        let file = gtk4::gio::File::for_path(root);
+        match file.monitor(
+            gtk4::gio::FileMonitorFlags::NONE,
+            gtk4::gio::Cancellable::NONE,
+        ) {
+            Ok(monitor) => {
+                // Capture a weak reference so the monitor's signal handler does
+                // not form a strong Rc cycle with AppState (which owns the
+                // monitor through `file_monitors`).
+                let weak = Rc::downgrade(state);
+                monitor.connect_changed(
+                    move |_monitor, child, _other_file, event_type| {
+                        log::debug!(
+                            "[sizzle] File monitor event: {:?} on {}",
+                            event_type,
+                            child.uri()
+                        );
+                        if let Some(state) = weak.upgrade() {
+                            debounce_rescan(&state);
+                        }
+                    },
+                );
+                state.borrow_mut().file_monitors.push(monitor);
+                log::info!("[sizzle] File monitor set up for: {}", root);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[sizzle] Failed to monitor scan root {}: {}",
+                    root,
+                    e
+                );
+            }
+        }
     }
+}
+
+/// Persist new scan settings, rescan projects, and rebuild the file monitors
+/// to match the new scan roots.
+fn apply_scan_settings(state: &State, settings: &ScanSettings) {
+    state.borrow_mut().store.set_scan_settings(settings);
+    perform_rescan(state);
+    setup_file_monitors(state);
+}
+
+/// Replace the current project list and rebuild the left-panel list.
+fn apply_projects(state: &State, new_projects: Vec<ScannedProject>) {
+    state.borrow_mut().projects = new_projects;
     populate_list(state);
+}
+
+/// Execute a full rescan: read current settings, scan for projects, update
+/// state, and repopulate the left-panel list.
+fn perform_rescan(state: &State) {
+    log::info!("[sizzle] perform_rescan: starting scan");
+    let settings = state.borrow().store.get_scan_settings();
+    let new_projects = scan_projects(&settings);
+    log::info!("[sizzle] perform_rescan: found {} project(s)", new_projects.len());
+    apply_projects(state, new_projects);
+}
+
+/// Schedule a debounced rescan. If a rescan is already pending, cancel the
+/// existing timer and start a fresh one. This ensures that rapid filesystem
+/// changes (e.g., during a git clone) produce at most one rescan, occurring
+/// 2 seconds after the last change event.
+fn debounce_rescan(state: &State) {
+    log::debug!("[sizzle] debounce_rescan: scheduling rescan in 2s");
+    // Cancel any existing timer.
+    if let Some(old_id) = state.borrow().rescan_timer_id.take() {
+        old_id.remove();
+    }
+
+    let state_c = state.clone();
+    let new_id = glib::timeout_add_local_once(Duration::from_secs(2), move || {
+        log::debug!("[sizzle] debounce timer fired, running rescan");
+        state_c.borrow().rescan_timer_id.set(None);
+        perform_rescan(&state_c);
+    });
+
+    state.borrow().rescan_timer_id.set(Some(new_id));
+}
+
+/// A deterministic, order-independent snapshot of the UI-relevant fields of a
+/// project. The poll timer uses this to decide whether a rescan produced any
+/// change worth rebuilding the list for — comparing only paths would miss
+/// metadata changes (new tags, renamed README) inside an existing project.
+/// Tag scores (`f64`) are deliberately excluded.
+fn project_signature(p: &ScannedProject) -> (String, String, Vec<String>, Vec<String>) {
+    let mut readmes = p.readme_files.clone();
+    readmes.sort();
+    let mut tags: Vec<String> = p.detected_tags.iter().map(|t| t.name.clone()).collect();
+    tags.sort();
+    (p.path.clone(), p.name.clone(), readmes, tags)
+}
+
+/// Start a periodic poll timer that rescans for project changes every 15
+/// seconds.  This catches cases the file monitor misses — the file monitor
+/// only watches immediate children of each scan root, so creating a
+/// directory under a scan root and *later* adding `.git` inside it (or
+/// adding files to an existing directory to make it look like a project)
+/// won't trigger a file-monitor event.  The poll timer ensures these
+/// changes are eventually picked up.
+///
+/// The poll skips the UI rebuild if a rescan yields no project changes.
+fn start_poll_timer(state: &State) {
+    let state_c = state.clone();
+    let _ = glib::timeout_add_local(Duration::from_secs(15), move || {
+        // If the projects are unchanged (same name/path/tags/readmes), skip
+        // the expensive populate_list call.
+        let settings = state_c.borrow().store.get_scan_settings();
+        let new_projects = scan_projects(&settings);
+        let changed = {
+            let st = state_c.borrow();
+            let old: HashSet<_> = st.projects.iter().map(project_signature).collect();
+            let new: HashSet<_> = new_projects.iter().map(project_signature).collect();
+            old != new
+        };
+        if changed {
+            log::info!(
+                "[sizzle] Poll detected project changes ({} → {} projects), updating",
+                state_c.borrow().projects.len(),
+                new_projects.len()
+            );
+            apply_projects(&state_c, new_projects);
+        }
+        glib::ControlFlow::Continue
+    });
+    log::info!("[sizzle] Poll timer started (15s interval)");
 }
