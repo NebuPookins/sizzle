@@ -1192,50 +1192,57 @@ fn format_relative_time(last_ms: i64) -> String {
     }
 }
 
+/// The first detected tag of a project, or the empty string when it has none.
+fn primary_tag(project: &ScannedProject) -> &str {
+    project
+        .detected_tags
+        .first()
+        .map(|t| t.name.as_str())
+        .unwrap_or("")
+}
+
 /// Apply the current search filter text to all rows in the project list.
 /// Sets each row visible or hidden based on whether the project name or
 /// tag matches the query.  Called both when the user types in the search
 /// entry and after `populate_list` rebuilds the list (so the filter
 /// survives rescans).
 fn apply_search_filter(st: &AppState) {
-    let query = st.search_query.clone();
-    let query_lower = query.to_lowercase();
+    let query = st.search_query.as_str();
     let case_sensitive = query.chars().any(|c| c.is_uppercase());
-    let mut i = 0;
-    while let Some(row) = st.list_box.row_at_index(i) {
-        let path = row.widget_name();
-        let visible = if path == "__kanban__" || path == "__separator__" {
-            // Always show kanban entry and its separator.
-            true
-        } else if query.is_empty() {
-            true
+    let query_lower = query.to_lowercase();
+
+    // One row per project, keyed by path. Building this once gives an O(1)
+    // lookup instead of scanning `st.projects` for every row. Skipped for an
+    // empty query, which simply shows every row.
+    let by_path: Option<HashMap<&str, &ScannedProject>> = if query.is_empty() {
+        None
+    } else {
+        Some(st.projects.iter().map(|p| (p.path.as_str(), p)).collect())
+    };
+
+    let matches = |p: &ScannedProject| {
+        let tag = primary_tag(p);
+        if case_sensitive {
+            p.name.contains(query) || tag.contains(query)
         } else {
-            st.projects
-                .iter()
-                .find(|p| p.path == path)
-                .map_or(false, |p| {
-                    let tag = p
-                        .detected_tags
-                        .first()
-                        .map(|t| t.name.as_str())
-                        .unwrap_or("");
-                    let in_name = if case_sensitive {
-                        p.name.contains(query.as_str())
-                    } else {
-                        p.name.to_lowercase().contains(&query_lower as &str)
-                    };
-                    let in_tag = !tag.is_empty() && (
-                        if case_sensitive {
-                            tag.contains(query.as_str())
-                        } else {
-                            tag.to_lowercase().contains(&query_lower as &str)
-                        }
-                    );
-                    in_name || in_tag
-                })
+            p.name.to_lowercase().contains(&query_lower)
+                || tag.to_lowercase().contains(&query_lower)
+        }
+    };
+
+    let mut child = st.list_box.first_child();
+    while let Some(row) = child {
+        let path = row.widget_name();
+        let visible = match path.as_str() {
+            // Always show kanban entry and its separator.
+            "__kanban__" | "__separator__" => true,
+            _ => match &by_path {
+                None => true,
+                Some(map) => map.get(path.as_str()).copied().map_or(false, &matches),
+            },
         };
         row.set_visible(visible);
-        i += 1;
+        child = row.next_sibling();
     }
 }
 
@@ -1337,11 +1344,7 @@ fn populate_list(state: &State) {
             .unwrap_or("");
         let is_ignored = marker == "ignored";
 
-        let tag = project
-            .detected_tags
-            .first()
-            .map(|t| t.name.as_str())
-            .unwrap_or("");
+        let tag = primary_tag(project);
 
         let is_running = st
             .project_widgets
