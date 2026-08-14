@@ -3,7 +3,7 @@
 //! A horizontally scrollable board with columns of cards grouped by project.
 //! Cards can be created, edited, duplicated, deleted, and dragged between columns.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
@@ -27,6 +27,7 @@ use sizzle_core::{
 };
 
 use crate::terminal::TerminalWidget;
+use crate::timer::TimerSlot;
 
 /// Tracks an active agent session launched from a card.
 struct ActiveSession {
@@ -55,7 +56,7 @@ pub struct KanbanBoardWidget {
     /// Parameters: (project_path, card_id).
     on_focus_session: RefCell<Option<Rc<dyn Fn(String, String)>>>,
     /// One-shot timer source for the nearest future agent-block expiry.
-    last_expiry_source: Rc<Cell<Option<glib::SourceId>>>,
+    last_expiry_source: TimerSlot,
 }
 
 impl KanbanBoardWidget {
@@ -91,7 +92,7 @@ impl KanbanBoardWidget {
             active_sessions: Rc::new(RefCell::new(HashMap::new())),
             on_launch_agent: RefCell::new(None),
             on_focus_session: RefCell::new(None),
-            last_expiry_source: Rc::new(Cell::new(None)),
+            last_expiry_source: TimerSlot::default(),
         };
 
         widget.refresh_board(&parent_window);
@@ -1947,13 +1948,9 @@ impl KanbanBoardWidget {
     // ── Expiry timer ───────────────────────────────────────────────────────────
 
     /// Find the nearest future `blocked_until` and set a one-shot timer to
-    /// refresh the board when it fires.  Cancels any previous timer.
+    /// refresh the board when it fires, re-arming for the next one.  Cancels
+    /// any previous timer.
     fn reschedule_expiry_timer(&self) {
-        // Cancel existing timer.
-        if let Some(id) = self.last_expiry_source.replace(None) {
-            id.remove();
-        }
-
         let board = self.board.borrow();
         let now = chrono::Utc::now().timestamp_millis();
         let nearest = board
@@ -1966,12 +1963,13 @@ impl KanbanBoardWidget {
         if let Some(nearest_ts) = nearest {
             let delay = (nearest_ts - now) as u64;
             let self_cl = self.clone();
-            let source = Rc::clone(&self.last_expiry_source);
-            let id = glib::timeout_add_local_once(Duration::from_millis(delay), move || {
-                source.set(None);
-                self_cl.refresh_self();
-            });
-            self.last_expiry_source.set(Some(id));
+            self.last_expiry_source
+                .schedule(Duration::from_millis(delay), move || {
+                    self_cl.refresh_self();
+                    self_cl.reschedule_expiry_timer();
+                });
+        } else {
+            self.last_expiry_source.cancel();
         }
     }
 

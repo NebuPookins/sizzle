@@ -1,6 +1,7 @@
 pub mod markdown;
 pub mod terminal;
 pub mod kanban;
+pub(crate) mod timer;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -23,6 +24,7 @@ use gtk4::{
 
 use sizzle_core::{scan_projects, AgentPreset, MetadataStore, ProjectMeta, ScanSettings, ScannedProject};
 use crate::kanban::KanbanBoardWidget;
+use crate::timer::TimerSlot;
 
 // ── App state ─────────────────────────────────────────────────────────────
 
@@ -109,7 +111,7 @@ struct AppState {
     file_monitors: Vec<gtk4::gio::FileMonitor>,
     /// Pending debounce rescan timer. Canceled when a new change arrives
     /// before the previous timer fires.
-    rescan_timer_id: Cell<Option<glib::SourceId>>,
+    rescan_timer_id: TimerSlot,
     /// Current search query, stored so `populate_list` can re-apply the
     /// active filter after rebuilding the project list.
     search_query: String,
@@ -305,7 +307,7 @@ fn build_ui(app: &Application) {
         status_dots: Rc::new(RefCell::new(Vec::new())),
         kanban_board: Some(kanban_board),
         file_monitors: Vec::new(),
-        rescan_timer_id: Cell::new(None),
+        rescan_timer_id: TimerSlot::default(),
         search_query: String::new(),
     }));
 
@@ -4112,19 +4114,12 @@ fn perform_rescan(state: &State) {
 /// 2 seconds after the last change event.
 fn debounce_rescan(state: &State) {
     log::debug!("[sizzle] debounce_rescan: scheduling rescan in 2s");
-    // Cancel any existing timer.
-    if let Some(old_id) = state.borrow().rescan_timer_id.take() {
-        old_id.remove();
-    }
-
     let state_c = state.clone();
-    let new_id = glib::timeout_add_local_once(Duration::from_secs(2), move || {
+    let timer = state_c.borrow().rescan_timer_id.clone();
+    timer.schedule(Duration::from_secs(2), move || {
         log::debug!("[sizzle] debounce timer fired, running rescan");
-        state_c.borrow().rescan_timer_id.set(None);
         perform_rescan(&state_c);
     });
-
-    state.borrow().rescan_timer_id.set(Some(new_id));
 }
 
 /// A deterministic, order-independent snapshot of the UI-relevant fields of a
