@@ -207,6 +207,30 @@ fn normalize_github_url(url: &str) -> Option<String> {
     None
 }
 
+/// Whether a repository has modified tracked files (staged or unstaged),
+/// excluding untracked files. Returns `false` for non-repositories or on error.
+///
+/// Kept separate from [`get_git_status`] on purpose: `--untracked-files=no`
+/// skips the untracked-file walk that dominates `git status` cost, and the list
+/// badge only needs a boolean rather than the full parsed status. With untracked
+/// files suppressed, a non-empty porcelain output is exactly "has a tracked
+/// change", so there is no need to parse the output.
+pub fn has_modified_tracked_files(project_path: &str) -> bool {
+    // Fail fast for non-repositories: `find_git_dir` is a few filesystem checks
+    // versus spawning a `git` process that would just report "not a repository".
+    if find_git_dir(Path::new(project_path)).is_none() {
+        return false;
+    }
+    // The `-- .` pathspec scopes the check to the project directory, so a
+    // project nested inside a larger repo reports only its own files instead of
+    // the whole parent repo's dirty state.
+    let output = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no", "--", "."])
+        .current_dir(project_path)
+        .output();
+    matches!(output, Ok(out) if out.status.success() && !out.stdout.is_empty())
+}
+
 /// Check if a worktree directory has uncommitted changes.
 pub fn worktree_has_uncommitted_changes(worktree_path: &str) -> bool {
     let output = Command::new("git")

@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gtk4::gdk;
@@ -115,6 +115,16 @@ struct AppState {
     /// Current search query, stored so `populate_list` can re-apply the
     /// active filter after rebuilding the project list.
     search_query: String,
+    /// Golden "M" badges for the git-dirty indicator, keyed by project path.
+    /// The badge's own visibility is the single source of truth for its dirty
+    /// state: `drain_git_results` toggles it in place, and a list rebuild reads
+    /// it back to preserve the prior state.
+    git_badges: Rc<RefCell<HashMap<String, Label>>>,
+    /// Worker → UI channel for completed git-status refresh results.
+    git_result_tx: mpsc::Sender<HashMap<String, bool>>,
+    git_result_rx: mpsc::Receiver<HashMap<String, bool>>,
+    /// Set while a git-status worker is running, to avoid overlapping workers.
+    git_refresh_in_progress: Arc<AtomicBool>,
 }
 
 type State = Rc<RefCell<AppState>>;
@@ -296,6 +306,8 @@ fn build_ui(app: &Application) {
     kanban_container.set_vexpand(true);
     project_stack.add_named(&kanban_container, Some("__kanban__"));
 
+    let (git_result_tx, git_result_rx) = mpsc::channel();
+
     let state = Rc::new(RefCell::new(AppState {
         store: store.clone(),
         projects,
@@ -309,6 +321,10 @@ fn build_ui(app: &Application) {
         file_monitors: Vec::new(),
         rescan_timer_id: TimerSlot::default(),
         search_query: String::new(),
+        git_badges: Rc::new(RefCell::new(HashMap::new())),
+        git_result_tx,
+        git_result_rx,
+        git_refresh_in_progress: Arc::new(AtomicBool::new(false)),
     }));
 
     {
@@ -417,6 +433,7 @@ fn build_ui(app: &Application) {
     });
 
     populate_list(&state);
+    refresh_git_statuses(&state);
     setup_file_monitors(&state);
     start_poll_timer(&state);
 
@@ -506,6 +523,9 @@ fn build_ui(app: &Application) {
                 }
             }
         }
+
+        // Apply any completed git-status refresh and toggle the "M" badges.
+        drain_git_results(&timer_state);
 
         if let Some(mem) = read_mem_breakdown() {
             let total_mb = mem.total_kb() / 1024;
@@ -630,6 +650,11 @@ fn build_ui(app: &Application) {
          }
          .marker-neutral {
              color: #514b6f;
+         }
+         .git-dirty {
+             color: #ffd700;
+             font-size: 10px;
+             font-weight: 700;
          }
          .app-sidebar-footer {
              border-top: 1px solid #2e2952;
@@ -1259,6 +1284,10 @@ fn populate_list(state: &State) {
     // Clone the Rc so we can mutate the inner vec without needing &mut AppState.
     let dots_rc = st.status_dots.clone();
     dots_rc.borrow_mut().clear();
+    // Take the previous badges so a rebuild preserves each project's last-known
+    // dirty state until the next background refresh lands.
+    let git_badges_rc = st.git_badges.clone();
+    let prev_git_badges = git_badges_rc.replace(HashMap::new());
 
     while let Some(row) = st.list_box.row_at_index(0) {
         // Break the ref cycle created by context_popover.set_parent(&row).
@@ -1371,6 +1400,23 @@ fn populate_list(state: &State) {
 
         name_lbl.set_margin_start(14);
         name_row.append(&name_lbl);
+
+        // Git-dirty badge: a golden "M" shown when the project has modified
+        // tracked files. The previous flag is carried over on rebuild; the
+        // background refresh updates it in place via `drain_git_results`.
+        let prev_dirty = prev_git_badges
+            .get(&project.path)
+            .map(|b| b.is_visible())
+            .unwrap_or(false);
+        let git_badge = Label::builder().label("M").build();
+        git_badge.add_css_class("git-dirty");
+        git_badge.set_margin_start(6);
+        git_badge.set_tooltip_text(Some("Modified tracked files"));
+        git_badge.set_visible(prev_dirty);
+        git_badges_rc
+            .borrow_mut()
+            .insert(project.path.clone(), git_badge.clone());
+        name_row.append(&git_badge);
 
         // Tag badge
         if !tag.is_empty() {
@@ -4096,6 +4142,45 @@ fn apply_scan_settings(state: &State, settings: &ScanSettings) {
 fn apply_projects(state: &State, new_projects: Vec<ScannedProject>) {
     state.borrow_mut().projects = new_projects;
     populate_list(state);
+    refresh_git_statuses(state);
+}
+
+/// Recompute the "modified tracked files" state for every project on a
+/// background thread, then hand the results back to the UI thread (via the
+/// mpsc channel drained by `drain_git_results`). The in-progress flag prevents
+/// overlapping workers. Blocking git calls never run on the GTK thread.
+fn refresh_git_statuses(state: &State) {
+    let st = state.borrow();
+    if st.git_refresh_in_progress.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let paths: Vec<String> = st.projects.iter().map(|p| p.path.clone()).collect();
+    let tx = st.git_result_tx.clone();
+    let in_progress = st.git_refresh_in_progress.clone();
+    std::thread::spawn(move || {
+        let results: HashMap<String, bool> = paths
+            .into_iter()
+            .map(|p| {
+                let dirty = sizzle_core::git::has_modified_tracked_files(&p);
+                (p, dirty)
+            })
+            .collect();
+        let _ = tx.send(results);
+        in_progress.store(false, Ordering::Release);
+    });
+}
+
+/// Apply completed git-status refreshes on the UI thread: update each badge's
+/// flag and toggle its visibility in place. Called from the 2-second timer.
+fn drain_git_results(state: &State) {
+    let st = state.borrow();
+    while let Ok(results) = st.git_result_rx.try_recv() {
+        for (path, is_dirty) in results {
+            if let Some(badge) = st.git_badges.borrow().get(&path) {
+                badge.set_visible(is_dirty);
+            }
+        }
+    }
 }
 
 /// Execute a full rescan: read current settings, scan for projects, update
@@ -4164,6 +4249,11 @@ fn start_poll_timer(state: &State) {
                 new_projects.len()
             );
             apply_projects(&state_c, new_projects);
+        } else {
+            // Project set unchanged, but tracked files may have been edited in
+            // place — refresh the git-dirty indicator (≤15s latency; the
+            // in-progress flag prevents overlapping workers).
+            refresh_git_statuses(&state_c);
         }
         glib::ControlFlow::Continue
     });
