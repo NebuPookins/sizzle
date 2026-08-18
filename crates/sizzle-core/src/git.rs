@@ -3,6 +3,15 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+/// Line-level change estimate for a single file, from `git diff --numstat`.
+/// `added`/`deleted` are the number of lines added and removed respectively.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffStat {
+    pub added: u32,
+    pub deleted: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitFileChange {
@@ -10,6 +19,8 @@ pub struct GitFileChange {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orig_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff: Option<DiffStat>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,78 +53,74 @@ fn parse_git_status(stdout: &str) -> GitStatus {
     let mut unstaged: Vec<GitFileChange> = Vec::new();
     let mut untracked: Vec<String> = Vec::new();
 
-    for line in stdout.lines() {
-        if line.starts_with("## ") {
-            let branch_line = &line[3..];
-            if branch_line.starts_with("HEAD (no branch)") {
-                is_detached = true;
-                continue;
-            }
-            if let Some(rest) = branch_line.strip_prefix("No commits yet on ") {
-                branch = Some(rest.trim().to_string());
-                continue;
-            }
-            if let Some(dot_idx) = branch_line.find("...") {
-                branch = Some(branch_line[..dot_idx].to_string());
-                let rest = &branch_line[dot_idx + 3..];
-                if let Some(bracket_idx) = rest.find(" [") {
-                    upstream = Some(rest[..bracket_idx].to_string());
-                    let bracket_content = &rest[bracket_idx + 2..];
-                    if let Some(end) = bracket_content.rfind(']') {
-                        let content = &bracket_content[..end];
-                        if let Some(a) = content.split("ahead ").nth(1).and_then(|s| s.split_whitespace().next()) {
-                            ahead = a.parse().unwrap_or(0);
-                        }
-                        if let Some(b) = content.split("behind ").nth(1).and_then(|s| s.split_whitespace().next()) {
-                            behind = b.parse().unwrap_or(0);
-                        }
+    // `-z` output is NUL-separated and unquoted: the `## ...` branch header
+    // comes first, then one `XY path` record per file. Rename/copy records
+    // carry the source path as the immediately-following record (destination
+    // first, then source).
+    let mut fields = stdout.split('\0');
+
+    if let Some(header) = fields.next().and_then(|h| h.strip_prefix("## ")) {
+        if header.starts_with("HEAD (no branch)") {
+            is_detached = true;
+        } else if let Some(rest) = header.strip_prefix("No commits yet on ") {
+            branch = Some(rest.trim().to_string());
+        } else if let Some(dot_idx) = header.find("...") {
+            branch = Some(header[..dot_idx].to_string());
+            let rest = &header[dot_idx + 3..];
+            if let Some(bracket_idx) = rest.find(" [") {
+                upstream = Some(rest[..bracket_idx].to_string());
+                let bracket_content = &rest[bracket_idx + 2..];
+                if let Some(end) = bracket_content.rfind(']') {
+                    let content = &bracket_content[..end];
+                    if let Some(a) = content.split("ahead ").nth(1).and_then(|s| s.split_whitespace().next()) {
+                        ahead = a.parse().unwrap_or(0);
                     }
-                } else {
-                    upstream = Some(rest.to_string());
+                    if let Some(b) = content.split("behind ").nth(1).and_then(|s| s.split_whitespace().next()) {
+                        behind = b.parse().unwrap_or(0);
+                    }
                 }
             } else {
-                branch = Some(branch_line.to_string());
+                upstream = Some(rest.to_string());
             }
-            continue;
+        } else {
+            branch = Some(header.to_string());
         }
+    }
 
-        if line.len() < 3 { continue; }
-        let x = line.as_bytes()[0] as char;
-        let y = line.as_bytes()[1] as char;
-        let raw_path = &line[3..];
+    while let Some(entry) = fields.next() {
+        if entry.len() < 3 { continue; }
+        let x = entry.as_bytes()[0] as char;
+        let y = entry.as_bytes()[1] as char;
+        let path = &entry[3..];
 
         if x == '?' && y == '?' {
-            untracked.push(raw_path.to_string());
+            untracked.push(path.to_string());
             continue;
         }
         if x == '!' && y == '!' { continue; }
 
+        // A rename/copy (`R`/`C`) is followed by a record holding the source
+        // path; `path` itself is already the destination.
+        let orig_path = if x == 'R' || x == 'C' {
+            fields.next().filter(|s| !s.is_empty()).map(String::from)
+        } else {
+            None
+        };
+
         if x != ' ' {
-            let mut file_path = raw_path.to_string();
-            let mut orig_path: Option<String> = None;
-            if x == 'R' || x == 'C' {
-                if let Some(arrow_idx) = raw_path.find(" -> ") {
-                    orig_path = Some(raw_path[..arrow_idx].to_string());
-                    file_path = raw_path[arrow_idx + 4..].to_string();
-                }
-            }
             staged.push(GitFileChange {
                 status: x.to_string(),
-                path: file_path,
+                path: path.to_string(),
                 orig_path,
+                diff: None,
             });
         }
-
         if y != ' ' {
-            let path = if let Some(tab_idx) = raw_path.find('\t') {
-                raw_path[..tab_idx].to_string()
-            } else {
-                raw_path.to_string()
-            };
             unstaged.push(GitFileChange {
                 status: y.to_string(),
-                path,
+                path: path.to_string(),
                 orig_path: None,
+                diff: None,
             });
         }
     }
@@ -123,14 +130,97 @@ fn parse_git_status(stdout: &str) -> GitStatus {
 
 pub fn get_git_status(project_path: String) -> Option<GitStatus> {
     let output = Command::new("git")
-        .args(["status", "--porcelain", "-b"])
+        .args(["status", "--porcelain", "-b", "-z"])
         .current_dir(&project_path)
         .output()
         .ok()?;
 
     if !output.status.success() { return None; }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Some(parse_git_status(&stdout))
+    let mut status = parse_git_status(&stdout);
+
+    // Attach line-change estimates (`+N -M`) to each staged/unstaged file. The
+    // numstat spawn is skipped when there is nothing to attach, so a clean repo
+    // pays only for the single `git status` above (this runs on a 5s UI timer).
+    if !status.staged.is_empty() {
+        attach_diffs(&mut status.staged, numstat(&project_path, DiffScope::Staged));
+    }
+    if !status.unstaged.is_empty() {
+        attach_diffs(&mut status.unstaged, numstat(&project_path, DiffScope::Unstaged));
+    }
+
+    Some(status)
+}
+
+/// Copy a [`DiffStat`] onto each file change, keyed by the file's new path.
+fn attach_diffs(files: &mut [GitFileChange], stats: std::collections::HashMap<String, DiffStat>) {
+    for f in files {
+        f.diff = stats.get(&f.path).copied();
+    }
+}
+
+/// Which side of the index `numstat` should report on.
+enum DiffScope {
+    Staged,
+    Unstaged,
+}
+
+/// Run `git diff --numstat -z` and return a map of new-path → [`DiffStat`].
+/// Binary files (whose counts are `-`) and rows with no line change (pure
+/// renames / mode changes) are omitted, as are any records that fail to parse.
+fn numstat(project_path: &str, scope: DiffScope) -> std::collections::HashMap<String, DiffStat> {
+    let mut cmd = Command::new("git");
+    cmd.arg("diff").arg("--numstat").arg("-z");
+    if matches!(scope, DiffScope::Staged) {
+        cmd.arg("--cached");
+    }
+    let output = cmd
+        .current_dir(project_path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success());
+    let Some(output) = output else {
+        return std::collections::HashMap::new();
+    };
+
+    parse_numstat(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse `git diff --numstat -z` output into a map of new-path → [`DiffStat`].
+/// In `-z` mode each record is `<added>\t<deleted>\t<path>\0`, with paths
+/// unquoted. A rename is `<added>\t<deleted>\t\0<source>\0<dest>\0`: an empty
+/// path followed by the source and destination as two further records.
+fn parse_numstat(stdout: &str) -> std::collections::HashMap<String, DiffStat> {
+    let mut map = std::collections::HashMap::new();
+    let mut fields = stdout.split('\0');
+    while let Some(field) = fields.next() {
+        if field.is_empty() {
+            continue;
+        }
+        let mut parts = field.splitn(3, '\t');
+        let added = parts.next().unwrap_or("");
+        let deleted = parts.next().unwrap_or("");
+        let path = parts.next().unwrap_or("");
+        let path = if path.is_empty() {
+            // Rename: skip the source record, key by the destination.
+            fields.next();
+            fields.next().unwrap_or("")
+        } else {
+            path
+        };
+        if path.is_empty() {
+            continue;
+        }
+        let (Ok(added), Ok(deleted)) = (added.parse(), deleted.parse()) else {
+            continue;
+        };
+        // A `0 0` row is a pure rename or mode change — nothing to estimate.
+        if added == 0 && deleted == 0 {
+            continue;
+        }
+        map.insert(path.to_string(), DiffStat { added, deleted });
+    }
+    map
 }
 
 fn find_git_dir(start_path: &Path) -> Option<String> {
@@ -332,4 +422,68 @@ pub fn get_project_repository_info(project_path: String) -> ProjectRepositoryInf
     }
 
     ProjectRepositoryInfo { is_git_repo: true, github_url: None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_unquotes_paths_with_spaces() {
+        let status = parse_git_status("## main\0 M my file.txt\0");
+        assert_eq!(status.branch.as_deref(), Some("main"));
+        assert_eq!(status.staged.len(), 0);
+        assert_eq!(status.unstaged.len(), 1);
+        assert_eq!(status.unstaged[0].status, "M");
+        assert_eq!(status.unstaged[0].path, "my file.txt");
+    }
+
+    #[test]
+    fn status_rename_with_unstaged_edit_uses_destination_path() {
+        // `RM dest\0source\0` — destination first, then source.
+        let status = parse_git_status("## main\0RM renamed.txt\0a => b.txt\0");
+        assert_eq!(status.staged.len(), 1);
+        assert_eq!(status.staged[0].status, "R");
+        assert_eq!(status.staged[0].path, "renamed.txt");
+        assert_eq!(status.staged[0].orig_path.as_deref(), Some("a => b.txt"));
+        assert_eq!(status.unstaged.len(), 1);
+        assert_eq!(status.unstaged[0].status, "M");
+        assert_eq!(status.unstaged[0].path, "renamed.txt");
+    }
+
+    #[test]
+    fn status_pure_rename() {
+        let status = parse_git_status("## main\0R  dest.txt\0src.txt\0");
+        assert_eq!(status.staged.len(), 1);
+        assert_eq!(status.staged[0].path, "dest.txt");
+        assert_eq!(status.staged[0].orig_path.as_deref(), Some("src.txt"));
+        assert_eq!(status.unstaged.len(), 0);
+    }
+
+    #[test]
+    fn status_untracked_path_with_spaces() {
+        let status = parse_git_status("## main\0?? my new file\0");
+        assert_eq!(status.untracked, vec!["my new file"]);
+    }
+
+    #[test]
+    fn numstat_keys_by_unquoted_path() {
+        let stats = parse_numstat("3\t2\tmy file.txt\0");
+        assert_eq!(stats.get("my file.txt").map(|d| (d.added, d.deleted)), Some((3, 2)));
+    }
+
+    #[test]
+    fn numstat_keys_rename_by_destination() {
+        // `1\t0\t\0source\0dest\0` — source first, then destination.
+        let stats = parse_numstat("1\t0\t\0ORIGINAL.txt\0DEST.txt\0");
+        assert_eq!(stats.get("DEST.txt").map(|d| (d.added, d.deleted)), Some((1, 0)));
+        assert!(!stats.contains_key("ORIGINAL.txt"));
+    }
+
+    #[test]
+    fn numstat_skips_binary_and_zero_change_rows() {
+        let stats = parse_numstat("-\t-\tbin.dat\00\t0\tmode.txt\01\t0\tok.txt\0");
+        assert_eq!(stats.len(), 1);
+        assert!(stats.contains_key("ok.txt"));
+    }
 }

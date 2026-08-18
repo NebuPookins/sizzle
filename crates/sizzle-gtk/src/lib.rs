@@ -2790,11 +2790,11 @@ fn update_git_status(path: &str, view: &TextView) {
     git_insert(&buf, "\n", "dim");
 
     for f in &status.staged {
-        git_insert(&buf, &format!("S {} {}\n", f.status, f.path), "green");
+        insert_change(&buf, f, "S ", "green");
     }
     for f in &status.unstaged {
         let color = if f.status == "D" { "red" } else { "yellow" };
-        git_insert(&buf, &format!("  {} {}\n", f.status, f.path), color);
+        insert_change(&buf, f, "  ", color);
     }
     for f in &status.untracked {
         git_insert(&buf, &format!("? {}\n", f), "dim");
@@ -2808,6 +2808,22 @@ fn update_git_status(path: &str, view: &TextView) {
 fn git_insert(buf: &gtk4::TextBuffer, text: &str, tag: &str) {
     let mut end = buf.end_iter();
     buf.insert_with_tags_by_name(&mut end, text, &[tag]);
+}
+
+/// Insert one changed-file row: its status letter + path (prefixed and colored
+/// per its section), followed by a `+N -M` line-change estimate when available.
+fn insert_change(buf: &gtk4::TextBuffer, f: &sizzle_core::git::GitFileChange, prefix: &str, color: &str) {
+    git_insert(buf, &format!("{}{} {}", prefix, f.status, f.path), color);
+    insert_diff_stat(buf, f.diff);
+    git_insert(buf, "\n", "dim");
+}
+
+/// Append a `+N -M` line-change estimate for a file, or nothing when there is
+/// no stat (binary, untracked, or a pure rename/mode change).
+fn insert_diff_stat(buf: &gtk4::TextBuffer, diff: Option<sizzle_core::git::DiffStat>) {
+    let Some(diff) = diff else { return };
+    git_insert(buf, &format!(" +{}", diff.added), "green");
+    git_insert(buf, &format!(" -{}", diff.deleted), "red");
 }
 
 // ── Folder picker + rescan ─────────────────────────────────────────────────
