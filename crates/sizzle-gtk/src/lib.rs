@@ -2,6 +2,7 @@ pub mod markdown;
 pub mod terminal;
 pub mod kanban;
 pub(crate) mod timer;
+mod project_list;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -91,7 +92,9 @@ struct ShellTabContext {
 
 struct AppState {
     store: Arc<MetadataStore>,
-    projects: Vec<ScannedProject>,
+    /// The scanned projects, paired with a search-cache index that's always
+    /// kept in sync with it. See `project_list::ProjectList`.
+    project_list: ProjectList,
     project_widgets: HashMap<String, Rc<RefCell<ProjectWidgets>>>,
     project_stack: Stack,
     list_box: ListBox,
@@ -126,6 +129,8 @@ struct AppState {
     /// Set while a git-status worker is running, to avoid overlapping workers.
     git_refresh_in_progress: Arc<AtomicBool>,
 }
+
+use project_list::{ProjectList, SearchEntry};
 
 type State = Rc<RefCell<AppState>>;
 
@@ -310,7 +315,7 @@ fn build_ui(app: &Application) {
 
     let state = Rc::new(RefCell::new(AppState {
         store: store.clone(),
-        projects,
+        project_list: ProjectList::new(projects),
         project_widgets: HashMap::new(),
         project_stack: project_stack.clone(),
         list_box: list_box.clone(),
@@ -1219,15 +1224,6 @@ fn format_relative_time(last_ms: i64) -> String {
     }
 }
 
-/// The first detected tag of a project, or the empty string when it has none.
-fn primary_tag(project: &ScannedProject) -> &str {
-    project
-        .detected_tags
-        .first()
-        .map(|t| t.name.as_str())
-        .unwrap_or("")
-}
-
 /// Apply the current search filter text to all rows in the project list.
 /// Sets each row visible or hidden based on whether the project name or
 /// tag matches the query.  Called both when the user types in the search
@@ -1235,27 +1231,13 @@ fn primary_tag(project: &ScannedProject) -> &str {
 /// survives rescans).
 fn apply_search_filter(st: &AppState) {
     let query = st.search_query.as_str();
-    let case_sensitive = query.chars().any(|c| c.is_uppercase());
     let query_lower = query.to_lowercase();
 
-    // One row per project, keyed by path. Building this once gives an O(1)
-    // lookup instead of scanning `st.projects` for every row. Skipped for an
-    // empty query, which simply shows every row.
-    let by_path: Option<HashMap<&str, &ScannedProject>> = if query.is_empty() {
-        None
-    } else {
-        Some(st.projects.iter().map(|p| (p.path.as_str(), p)).collect())
-    };
-
-    let matches = |p: &ScannedProject| {
-        let tag = primary_tag(p);
-        if case_sensitive {
-            p.name.contains(query) || tag.contains(query)
-        } else {
-            p.name.to_lowercase().contains(&query_lower)
-                || tag.to_lowercase().contains(&query_lower)
-        }
-    };
+    // `search_cache` holds the pre-lowercased name/tag for every project
+    // (rebuilt only when the project list changes), so matching here is a
+    // single O(1) map lookup per row plus a substring check — no
+    // to_lowercase() calls on the hot path of every keystroke.
+    let matches = |entry: &SearchEntry| entry.matches(query, &query_lower);
 
     let mut child = st.list_box.first_child();
     while let Some(row) = child {
@@ -1263,10 +1245,12 @@ fn apply_search_filter(st: &AppState) {
         let visible = match path.as_str() {
             // Always show kanban entry and its separator.
             "__kanban__" | "__separator__" => true,
-            _ => match &by_path {
-                None => true,
-                Some(map) => map.get(path.as_str()).copied().map_or(false, &matches),
-            },
+            _ if query.is_empty() => true,
+            _ => st
+                .project_list
+                .search_cache()
+                .get(path.as_str())
+                .map_or(false, &matches),
         };
         row.set_visible(visible);
         child = row.next_sibling();
@@ -1358,7 +1342,7 @@ fn populate_list(state: &State) {
 
     let all_meta = st.store.get_all_metadata();
 
-    let mut sorted: Vec<&ScannedProject> = st.projects.iter().collect();
+    let mut sorted: Vec<&ScannedProject> = st.project_list.projects().iter().collect();
     sorted.sort_by_key(|p| {
         let is_active = st
             .project_widgets
@@ -1375,7 +1359,7 @@ fn populate_list(state: &State) {
             .unwrap_or("");
         let is_ignored = marker == "ignored";
 
-        let tag = primary_tag(project);
+        let tag = project_list::primary_tag(project);
 
         let is_running = st
             .project_widgets
@@ -1626,7 +1610,7 @@ fn populate_list(state: &State) {
     // Drop it so we can re-borrow state for the kanban update.
     drop(st);
     if let Some(kb) = state.borrow().kanban_board.as_ref() {
-        let projects = state.borrow().projects.clone();
+        let projects = state.borrow().project_list.projects().to_vec();
         let window = state.borrow().main_window.clone();
         kb.set_projects(projects, &window);
     }
@@ -1639,7 +1623,7 @@ fn select_project(state: &State, path: &str) {
 
     let found = {
         let st = state.borrow();
-        st.projects.iter().any(|p| p.path == path)
+        st.project_list.projects().iter().any(|p| p.path == path)
     };
     if !found {
         return;
@@ -1950,7 +1934,7 @@ fn select_project(state: &State, path: &str) {
             update_git_status_for_current_tab(&pw, &path);
         }
         st.store.set_last_launched(&path);
-        if let Some(project) = st.projects.iter().find(|p| p.path == path) {
+        if let Some(project) = st.project_list.projects().iter().find(|p| p.path == path) {
             st.main_window
                 .set_title(Some(&format!("Sizzle – {}", project.name)));
         }
@@ -3405,7 +3389,8 @@ fn read_project_mem_breakdowns(state: &AppState) -> Option<Vec<ProjectMemBreakdo
         .iter()
         .map(|(path, pw)| {
             let name = state
-                .projects
+                .project_list
+                .projects()
                 .iter()
                 .find(|project| project.path == *path)
                 .map(|project| project.name.clone())
@@ -4156,7 +4141,7 @@ fn apply_scan_settings(state: &State, settings: &ScanSettings) {
 
 /// Replace the current project list and rebuild the left-panel list.
 fn apply_projects(state: &State, new_projects: Vec<ScannedProject>) {
-    state.borrow_mut().projects = new_projects;
+    state.borrow_mut().project_list = ProjectList::new(new_projects);
     populate_list(state);
     refresh_git_statuses(state);
 }
@@ -4170,7 +4155,7 @@ fn refresh_git_statuses(state: &State) {
     if st.git_refresh_in_progress.swap(true, Ordering::AcqRel) {
         return;
     }
-    let paths: Vec<String> = st.projects.iter().map(|p| p.path.clone()).collect();
+    let paths: Vec<String> = st.project_list.projects().iter().map(|p| p.path.clone()).collect();
     let tx = st.git_result_tx.clone();
     let in_progress = st.git_refresh_in_progress.clone();
     std::thread::spawn(move || {
@@ -4252,16 +4237,16 @@ fn start_poll_timer(state: &State) {
         // the expensive populate_list call.
         let settings = state_c.borrow().store.get_scan_settings();
         let new_projects = scan_projects(&settings);
-        let changed = {
+        let (changed, old_count) = {
             let st = state_c.borrow();
-            let old: HashSet<_> = st.projects.iter().map(project_signature).collect();
+            let old: HashSet<_> = st.project_list.projects().iter().map(project_signature).collect();
             let new: HashSet<_> = new_projects.iter().map(project_signature).collect();
-            old != new
+            (old != new, old.len())
         };
         if changed {
             log::info!(
                 "[sizzle] Poll detected project changes ({} → {} projects), updating",
-                state_c.borrow().projects.len(),
+                old_count,
                 new_projects.len()
             );
             apply_projects(&state_c, new_projects);
