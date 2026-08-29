@@ -415,6 +415,7 @@ fn build_ui(app: &Application) {
             log::info!("[kanban] Focus session: project_path={}, card_id={}", project_path, card_id);
             if project_path.is_empty() { return; }
             select_project(&state, &project_path);
+            state.borrow().store.set_last_launched(&project_path);
             // Extract notebook and terminal outside the borrow scope, because
             // calling set_current_page / focus() triggers focus-enter signals
             // that also borrow state (via activate_agent_terminal), causing
@@ -463,6 +464,7 @@ fn build_ui(app: &Application) {
                 st.main_window.set_title(Some("Sizzle"));
             } else {
                 select_project(&state, &path);
+                state.borrow().store.set_last_launched(&path);
             }
         });
     }
@@ -1232,12 +1234,14 @@ fn format_relative_time(last_ms: i64) -> String {
 fn apply_search_filter(st: &AppState) {
     let query = st.search_query.as_str();
     let query_lower = query.to_lowercase();
+    let case_sensitive = query.chars().any(|c| c.is_uppercase());
 
     // `search_cache` holds the pre-lowercased name/tag for every project
     // (rebuilt only when the project list changes), so matching here is a
     // single O(1) map lookup per row plus a substring check — no
-    // to_lowercase() calls on the hot path of every keystroke.
-    let matches = |entry: &SearchEntry| entry.matches(query, &query_lower);
+    // to_lowercase() or uppercase-scan calls on the hot path of every
+    // keystroke.
+    let matches = |entry: &SearchEntry| entry.matches(query, &query_lower, case_sensitive);
 
     let mut child = st.list_box.first_child();
     while let Some(row) = child {
@@ -1353,10 +1357,8 @@ fn populate_list(state: &State) {
     });
 
     for project in sorted {
-        let marker = all_meta
-            .get(&project.path)
-            .and_then(|m| m.marker.as_deref())
-            .unwrap_or("");
+        let meta = all_meta.get(&project.path);
+        let marker = meta.and_then(|m| m.marker.as_deref()).unwrap_or("");
         let is_ignored = marker == "ignored";
 
         let tag = project_list::primary_tag(project);
@@ -1366,11 +1368,12 @@ fn populate_list(state: &State) {
             .get(&project.path)
             .map_or(false, |pw| pw.borrow().terminals.iter().any(|t| t.is_alive()));
 
-        let last_active = all_meta
-            .get(&project.path)
+        let last_active = meta
             .and_then(|m| m.last_launched)
             .map(format_relative_time)
             .unwrap_or_else(|| "never".to_string());
+
+        let last_provider = meta.and_then(|m| m.last_provider.as_deref());
 
         let name_lbl = Label::builder()
             .label(&project.name)
@@ -1411,10 +1414,11 @@ fn populate_list(state: &State) {
             name_row.append(&tag_lbl);
         }
 
-        let last_display = if is_running {
-            "claude · running".to_string()
-        } else {
-            last_active
+        let status = if is_running { "running" } else { last_active.as_str() };
+        let last_display = match last_provider {
+            Some(p) => format!("{} · {}", p, status),
+            None if is_running => "claude · running".to_string(),
+            None => status.to_string(),
         };
         let time_lbl = Label::builder()
             .label(&last_display)
@@ -1618,6 +1622,9 @@ fn populate_list(state: &State) {
 
 // ── Switch to a project ────────────────────────────────────────────────────
 
+/// Open a project's view (build it if needed), switch to it, and restore focus.
+/// Launch metadata is recorded by the caller: `set_last_launched` for a plain
+/// open, `launch_terminals` (via `set_launch_metadata`) for an agent launch.
 fn select_project(state: &State, path: &str) {
     let path = path.to_string();
 
@@ -1933,7 +1940,6 @@ fn select_project(state: &State, path: &str) {
             let pw = pw.borrow();
             update_git_status_for_current_tab(&pw, &path);
         }
-        st.store.set_last_launched(&path);
         if let Some(project) = st.project_list.projects().iter().find(|p| p.path == path) {
             st.main_window
                 .set_title(Some(&format!("Sizzle – {}", project.name)));
@@ -2342,6 +2348,11 @@ fn launch_terminals(
     notebook: &Notebook,
     state: &State,
 ) -> (terminal::TerminalWidget, gtk4::Paned) {
+    // Record the launch (last_launched + last_provider) in one write. The
+    // provider is the button's label (`tab_label`), never the command line, so
+    // a custom preset like "DeepSeek" → `claude-deepseek` shows as "DeepSeek".
+    state.borrow().store.set_launch_metadata(project_path, tab_label);
+
     let agent = terminal::TerminalWidget::new(Some(working_dir), agent_cmd);
     let agent_handle = agent.handle();
     let repopulate = state.borrow().repopulate.clone();

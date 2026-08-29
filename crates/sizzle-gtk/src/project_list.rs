@@ -29,11 +29,11 @@ pub struct SearchEntry {
 }
 
 impl SearchEntry {
-    /// Smart-case substring match against the project's name/tag:
-    /// uppercase in the query forces case-sensitive matching, otherwise
-    /// the cached lowercased fields are used.
-    pub fn matches(&self, query: &str, query_lower: &str) -> bool {
-        let case_sensitive = query.chars().any(|c| c.is_uppercase());
+    /// Substring match against the project's name/tag. When `case_sensitive`
+    /// is true the original-cased name/tag are searched; otherwise the cached
+    /// lowercased fields are used. The caller computes `case_sensitive` once
+    /// per query (smart-case: any uppercase in the query), not once per row.
+    pub fn matches(&self, query: &str, query_lower: &str, case_sensitive: bool) -> bool {
         if case_sensitive {
             self.name.contains(query) || self.tag.contains(query)
         } else {
@@ -97,25 +97,25 @@ mod tests {
     #[test]
     fn lowercase_query_matches_regardless_of_name_case() {
         let e = entry("MyProject", "Rust");
-        assert!(e.matches("project", &"project".to_lowercase()));
+        assert!(e.matches("project", &"project".to_lowercase(), false));
     }
 
     #[test]
-    fn uppercase_query_is_case_sensitive() {
+    fn case_sensitive_query_uses_original_case() {
         let e = entry("myproject", "Rust");
-        assert!(!e.matches("Project", &"project".to_lowercase()));
-        assert!(e.matches("project", &"project".to_lowercase()));
+        assert!(!e.matches("Project", &"project".to_lowercase(), true));
+        assert!(e.matches("project", &"project".to_lowercase(), false));
     }
 
     #[test]
     fn matches_on_tag_as_well_as_name() {
         let e = entry("widgets", "Rust");
-        assert!(e.matches("rust", &"rust".to_lowercase()));
+        assert!(e.matches("rust", &"rust".to_lowercase(), false));
     }
 
     #[test]
     fn no_match_when_neither_name_nor_tag_contains_query() {
         let e = entry("widgets", "Rust");
-        assert!(!e.matches("python", &"python".to_lowercase()));
+        assert!(!e.matches("python", &"python".to_lowercase(), false));
     }
 }

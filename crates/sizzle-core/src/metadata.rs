@@ -22,12 +22,13 @@ pub struct ProjectTagOverride {
 
 pub type ProjectMarker = Option<String>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectMeta {
     pub last_launched: Option<i64>,
     pub tag_override: Option<ProjectTagOverride>,
     pub marker: ProjectMarker,
+    pub last_provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,22 +200,27 @@ impl MetadataStore {
 
     pub fn get_metadata(&self, project_path: &str) -> ProjectMeta {
         let db = self.read_db();
-        db.projects.get(project_path).cloned().unwrap_or(ProjectMeta {
-            last_launched: None,
-            tag_override: None,
-            marker: None,
-        })
+        db.projects.get(project_path).cloned().unwrap_or_default()
     }
 
     pub fn set_last_launched(&self, project_path: &str) {
         let mut db = self.read_db();
         {
-            let entry = db.projects.entry(project_path.to_string()).or_insert(ProjectMeta {
-                last_launched: None,
-                tag_override: None,
-                marker: None,
-            });
+            let entry = db.projects.entry(project_path.to_string()).or_default();
             entry.last_launched = Some(chrono::Utc::now().timestamp_millis());
+        }
+        self.write_db(&db);
+    }
+
+    /// Record an agent launch: update `last_launched` and `last_provider`
+    /// together in a single read + write, so launching an agent doesn't pay for
+    /// two separate full-db writes (one for each field).
+    pub fn set_launch_metadata(&self, project_path: &str, provider: &str) {
+        let mut db = self.read_db();
+        {
+            let entry = db.projects.entry(project_path.to_string()).or_default();
+            entry.last_launched = Some(chrono::Utc::now().timestamp_millis());
+            entry.last_provider = Some(provider.to_string());
         }
         self.write_db(&db);
     }
@@ -262,11 +268,7 @@ impl MetadataStore {
     pub fn set_tag_override(&self, project_path: &str, override_val: Option<ProjectTagOverride>) -> ProjectMeta {
         let mut db = self.read_db();
         let result = {
-            let entry = db.projects.entry(project_path.to_string()).or_insert(ProjectMeta {
-                last_launched: None,
-                tag_override: None,
-                marker: None,
-            });
+            let entry = db.projects.entry(project_path.to_string()).or_default();
             entry.tag_override = override_val.map(|o| Self::normalize_tag_override(&o));
             entry.marker = Self::normalize_marker(&entry.marker);
             entry.clone()
@@ -278,11 +280,7 @@ impl MetadataStore {
     pub fn set_project_marker(&self, project_path: &str, marker: ProjectMarker) -> ProjectMeta {
         let mut db = self.read_db();
         let result = {
-            let entry = db.projects.entry(project_path.to_string()).or_insert(ProjectMeta {
-                last_launched: None,
-                tag_override: None,
-                marker: None,
-            });
+            let entry = db.projects.entry(project_path.to_string()).or_default();
             entry.marker = Self::normalize_marker(&marker);
             entry.clone()
         };
