@@ -116,13 +116,29 @@ impl MetadataStore {
         db
     }
 
-    fn write_db(&self, db: &DB) {
-        self.ensure_dir();
-        let json = serde_json::to_string_pretty(db).unwrap();
-        fs::write(&self.tmp_path, &json).ok();
-        fs::rename(&self.tmp_path, &self.db_path).ok();
+    /// Atomically replace the on-disk database and only then update the cache.
+    ///
+    /// Keeping these operations ordered is important: a failed write must not
+    /// make the process believe data was saved when the previous database is
+    /// still the one on disk.
+    fn write_db(&self, db: &DB) -> Result<(), String> {
+        fs::create_dir_all(&self.config_dir)
+            .map_err(|error| format!("Failed to create metadata directory: {error}"))?;
+        let json = serde_json::to_string_pretty(db)
+            .map_err(|error| format!("Failed to serialize metadata: {error}"))?;
+        fs::write(&self.tmp_path, json)
+            .map_err(|error| format!("Failed to write temporary metadata: {error}"))?;
+        fs::rename(&self.tmp_path, &self.db_path)
+            .map_err(|error| format!("Failed to replace metadata database: {error}"))?;
         let mut cache = self.cache.lock().unwrap();
         *cache = Some(db.clone());
+        Ok(())
+    }
+
+    fn persist_db(&self, db: &DB) {
+        if let Err(error) = self.write_db(db) {
+            log::error!("[sizzle] {error}");
+        }
     }
 
     fn normalize_root_path(root: &str) -> String {
@@ -209,7 +225,7 @@ impl MetadataStore {
             let entry = db.projects.entry(project_path.to_string()).or_default();
             entry.last_launched = Some(chrono::Utc::now().timestamp_millis());
         }
-        self.write_db(&db);
+        self.persist_db(&db);
     }
 
     /// Record an agent launch: update `last_launched` and `last_provider`
@@ -222,7 +238,7 @@ impl MetadataStore {
             entry.last_launched = Some(chrono::Utc::now().timestamp_millis());
             entry.last_provider = Some(provider.to_string());
         }
-        self.write_db(&db);
+        self.persist_db(&db);
     }
 
     pub fn get_all_metadata(&self) -> HashMap<String, ProjectMeta> {
@@ -252,7 +268,7 @@ impl MetadataStore {
         if changed {
             let mut db = self.read_db();
             db.projects = result.clone();
-            self.write_db(&db);
+            self.persist_db(&db);
         }
 
         result
@@ -273,7 +289,7 @@ impl MetadataStore {
             entry.marker = Self::normalize_marker(&entry.marker);
             entry.clone()
         };
-        self.write_db(&db);
+        self.persist_db(&db);
         result
     }
 
@@ -284,7 +300,7 @@ impl MetadataStore {
             entry.marker = Self::normalize_marker(&marker);
             entry.clone()
         };
-        self.write_db(&db);
+        self.persist_db(&db);
         result
     }
 
@@ -292,7 +308,7 @@ impl MetadataStore {
         let mut db = self.read_db();
         if let Some(meta) = db.projects.remove(old_path) {
             db.projects.insert(new_path.to_string(), meta);
-            self.write_db(&db);
+            self.persist_db(&db);
         }
     }
 
@@ -323,7 +339,7 @@ impl MetadataStore {
         if normalized != settings {
             let mut db = self.read_db();
             db.scan_settings = Some(normalized.clone());
-            self.write_db(&db);
+            self.persist_db(&db);
         }
 
         normalized
@@ -337,7 +353,7 @@ impl MetadataStore {
         };
         let mut db = self.read_db();
         db.scan_settings = Some(normalized.clone());
-        self.write_db(&db);
+        self.persist_db(&db);
         normalized
     }
 
@@ -348,7 +364,7 @@ impl MetadataStore {
     pub fn set_agent_presets(&self, presets: Vec<AgentPreset>) -> Vec<AgentPreset> {
         let mut db = self.read_db();
         db.agent_presets = presets;
-        self.write_db(&db);
+        self.persist_db(&db);
         db.agent_presets
     }
 
@@ -360,7 +376,41 @@ impl MetadataStore {
     pub fn set_kanban_board(&self, board: &crate::kanban::KanbanBoard) {
         let mut db = self.read_db();
         db.kanban_board = Some(board.clone());
-        self.write_db(&db);
+        self.persist_db(&db);
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_dir() -> PathBuf {
+        std::env::temp_dir().join(format!("sizzle-metadata-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn db_with_project(path: &str) -> DB {
+        DB {
+            projects: HashMap::from([(path.to_string(), ProjectMeta::default())]),
+            scan_settings: None,
+            agent_presets: Vec::new(),
+            kanban_board: None,
+        }
+    }
+
+    #[test]
+    fn failed_write_keeps_the_last_persisted_database_in_cache() {
+        let config_dir = test_dir();
+        let mut store = MetadataStore::new(config_dir.clone());
+        store.write_db(&db_with_project("persisted")).unwrap();
+
+        // A temporary path whose parent does not exist makes the write fail.
+        store.tmp_path = config_dir.join("missing").join("db.json.tmp");
+        assert!(store.write_db(&db_with_project("unsaved")).is_err());
+
+        let cached = store.read_db();
+        assert!(cached.projects.contains_key("persisted"));
+        assert!(!cached.projects.contains_key("unsaved"));
+
+        fs::remove_dir_all(config_dir).unwrap();
+    }
+}
