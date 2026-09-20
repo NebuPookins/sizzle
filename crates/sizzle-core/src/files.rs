@@ -401,7 +401,10 @@ pub fn read_markdown_file(file_path: String) -> Option<String> {
     fs::read_to_string(&file_path).ok()
 }
 
-pub fn write_markdown_file(file_path: String, content: String) -> Result<(), String> {
+pub fn write_markdown_file(project_path: String, file_path: String, content: String) -> Result<(), String> {
+    if !is_within_root(&project_path, &file_path) {
+        return Err("Path is outside project root.".to_string());
+    }
     fs::write(&file_path, &content).map_err(|e| format!("Failed to write file: {}", e))
 }
 
