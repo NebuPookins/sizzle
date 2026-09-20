@@ -1774,6 +1774,7 @@ fn select_project(state: &State, path: &str) {
                 });
 
                 let fp = md_path.clone();
+                let project_path_save = path.clone();
                 let mv_save = mv.clone();
                 let eb3 = edit_btn.clone();
                 let sb3 = save_btn.clone();
@@ -1781,7 +1782,7 @@ fn select_project(state: &State, path: &str) {
                 save_btn.connect_clicked(move |_| {
                     let text = mv_save.get_buffer_text();
                     mv_save.set_source(&text);
-                    if sizzle_core::files::write_markdown_file(fp.clone(), text).is_ok() {
+                    if sizzle_core::files::write_markdown_file(project_path_save.clone(), fp.clone(), text).is_ok() {
                         mv_save.set_editable(false);
                         eb3.set_visible(true);
                         sb3.set_visible(false);
@@ -1793,6 +1794,7 @@ fn select_project(state: &State, path: &str) {
                 {
                     let mv_saver = mv.clone();
                     let fp = md_path.clone();
+                    let project_path_save = path.clone();
                     let eb4 = edit_btn.clone();
                     let sb4 = save_btn.clone();
                     let cb4 = cancel_btn.clone();
@@ -1801,7 +1803,7 @@ fn select_project(state: &State, path: &str) {
                         if kv == gdk::Key::s && mods.contains(gdk::ModifierType::CONTROL_MASK) {
                             let text = mv_saver.get_buffer_text();
                             mv_saver.set_source(&text);
-                            if sizzle_core::files::write_markdown_file(fp.clone(), text).is_ok() {
+                            if sizzle_core::files::write_markdown_file(project_path_save.clone(), fp.clone(), text).is_ok() {
                                 mv_saver.set_editable(false);
                                 eb4.set_visible(true);
                                 sb4.set_visible(false);
@@ -2175,12 +2177,13 @@ fn build_explorer_tab(project_root: &str) -> (Paned, markdown::MarkdownView) {
         let sb3 = md_save_btn.clone();
         let cb3 = md_cancel_btn.clone();
         let path = current_md_path.clone();
+        let project_path_save = project_root.to_string();
         md_save_btn.connect_clicked(move |_| {
             let text = mv.get_buffer_text();
             let file_path = path.borrow().clone();
             if let Some(fp) = file_path {
                 mv.set_source(&text);
-                if sizzle_core::files::write_markdown_file(fp, text).is_ok() {
+                if sizzle_core::files::write_markdown_file(project_path_save.clone(), fp, text).is_ok() {
                     mv.set_editable(false);
                     eb3.set_visible(true);
                     sb3.set_visible(false);
@@ -2194,6 +2197,7 @@ fn build_explorer_tab(project_root: &str) -> (Paned, markdown::MarkdownView) {
     {
         let mv = md_view.clone();
         let path = current_md_path.clone();
+        let project_path_save = project_root.to_string();
         let eb = md_edit_btn.clone();
         let sb = md_save_btn.clone();
         let cb = md_cancel_btn.clone();
@@ -2204,7 +2208,7 @@ fn build_explorer_tab(project_root: &str) -> (Paned, markdown::MarkdownView) {
                 let file_path = path.borrow().clone();
                 if let Some(fp) = file_path {
                     mv.set_source(&text);
-                    if sizzle_core::files::write_markdown_file(fp, text).is_ok() {
+                    if sizzle_core::files::write_markdown_file(project_path_save.clone(), fp, text).is_ok() {
                         mv.set_editable(false);
                         eb.set_visible(true);
                         sb.set_visible(false);
