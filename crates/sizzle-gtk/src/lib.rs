@@ -18,7 +18,7 @@ use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
-    EventControllerKey, GestureClick, HeaderBar, Label, ListBox, ListBoxRow, Notebook,
+    EventControllerKey, GestureClick, HeaderBar, Image, Label, ListBox, ListBoxRow, Notebook,
     Orientation, Paned, Picture, Popover, ScrolledWindow, Stack, StackTransitionType, TextView,
     WrapMode,
 };
@@ -123,11 +123,26 @@ struct AppState {
     /// state: `drain_git_results` toggles it in place, and a list rebuild reads
     /// it back to preserve the prior state.
     git_badges: Rc<RefCell<HashMap<String, Label>>>,
+    /// Git remote buttons for projects, showing GitHub/globe icons.
+    git_remote_btns: Rc<RefCell<HashMap<String, RemoteButtonState>>>,
     /// Worker → UI channel for completed git-status refresh results.
-    git_result_tx: mpsc::Sender<HashMap<String, bool>>,
-    git_result_rx: mpsc::Receiver<HashMap<String, bool>>,
+    git_result_tx: mpsc::Sender<HashMap<String, GitRefreshResult>>,
+    git_result_rx: mpsc::Receiver<HashMap<String, GitRefreshResult>>,
     /// Set while a git-status worker is running, to avoid overlapping workers.
     git_refresh_in_progress: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Debug)]
+struct GitRefreshResult {
+    dirty: bool,
+    remote_info: Option<sizzle_core::git::GitRemoteInfo>,
+}
+
+#[derive(Clone)]
+struct RemoteButtonState {
+    button: Button,
+    url_holder: Rc<RefCell<Option<String>>>,
+    remote_info: Rc<RefCell<Option<sizzle_core::git::GitRemoteInfo>>>,
 }
 
 use project_list::{ProjectList, SearchEntry};
@@ -152,8 +167,6 @@ pub fn run() {
 fn install_app_icon() {
     use std::path::PathBuf;
 
-    let svg_data = include_bytes!("../../../assets/icons/app-icon.svg");
-    let icon_name = "net.nebupookins.sizzle";
     let data_home = std::env::var("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -161,12 +174,19 @@ fn install_app_icon() {
             PathBuf::from(home).join(".local/share")
         });
     let icon_dir = data_home.join("icons/hicolor/scalable/apps");
-    let icon_path = icon_dir.join(format!("{icon_name}.svg"));
-    if icon_path.exists() {
-        return;
-    }
     std::fs::create_dir_all(&icon_dir).ok();
-    let _ = std::fs::write(&icon_path, svg_data);
+
+    let app_svg = include_bytes!("../../../assets/icons/app-icon.svg");
+    let app_icon_path = icon_dir.join("net.nebupookins.sizzle.svg");
+    if !app_icon_path.exists() {
+        let _ = std::fs::write(&app_icon_path, app_svg);
+    }
+
+    let github_svg = include_bytes!("../../../assets/icons/github.svg");
+    let github_icon_path = icon_dir.join("sizzle-github.svg");
+    if !github_icon_path.exists() {
+        let _ = std::fs::write(&github_icon_path, github_svg);
+    }
 }
 
 // ── Config dir ────────────────────────────────────────────────────────────
@@ -327,6 +347,7 @@ fn build_ui(app: &Application) {
         rescan_timer_id: TimerSlot::default(),
         search_query: String::new(),
         git_badges: Rc::new(RefCell::new(HashMap::new())),
+        git_remote_btns: Rc::new(RefCell::new(HashMap::new())),
         git_result_tx,
         git_result_rx,
         git_refresh_in_progress: Arc::new(AtomicBool::new(false)),
@@ -662,6 +683,16 @@ fn build_ui(app: &Application) {
              color: #ffd700;
              font-size: 10px;
              font-weight: 700;
+         }
+         .git-remote-btn {
+             padding: 0 2px;
+             min-width: 0;
+             min-height: 0;
+             margin-start: 2px;
+             color: #9088b8;
+         }
+         .git-remote-btn:hover {
+             color: #ede8f8;
          }
          .app-sidebar-footer {
              border-top: 1px solid #2e2952;
@@ -1277,6 +1308,9 @@ fn populate_list(state: &State) {
     let git_badges_rc = st.git_badges.clone();
     let prev_git_badges = git_badges_rc.replace(HashMap::new());
 
+    let git_remote_btns_rc = st.git_remote_btns.clone();
+    let prev_git_remote_btns = git_remote_btns_rc.replace(HashMap::new());
+
     while let Some(row) = st.list_box.row_at_index(0) {
         // Break the ref cycle created by context_popover.set_parent(&row).
         // GTK4's set_parent makes the child hold a strong ref to its parent,
@@ -1404,6 +1438,41 @@ fn populate_list(state: &State) {
             .borrow_mut()
             .insert(project.path.clone(), git_badge.clone());
         name_row.append(&git_badge);
+
+        // Git remote icon button
+        let prev_remote_info = prev_git_remote_btns
+            .get(&project.path)
+            .and_then(|st| st.remote_info.borrow().clone());
+
+        let url_holder = Rc::new(RefCell::new(prev_remote_info.as_ref().and_then(|r| r.web_url.clone())));
+        let remote_info_holder = Rc::new(RefCell::new(prev_remote_info.clone()));
+
+        let remote_btn = Button::builder()
+            .has_frame(false)
+            .visible(false)
+            .build();
+        remote_btn.add_css_class("git-remote-btn");
+
+        {
+            let url_holder = url_holder.clone();
+            remote_btn.connect_clicked(move |_| {
+                if let Some(ref url) = *url_holder.borrow() {
+                    let _ = gtk4::gio::AppInfo::launch_default_for_uri(url, None::<&gtk4::gio::AppLaunchContext>);
+                }
+            });
+        }
+
+        update_remote_button(&remote_btn, &url_holder, prev_remote_info.as_ref());
+
+        git_remote_btns_rc.borrow_mut().insert(
+            project.path.clone(),
+            RemoteButtonState {
+                button: remote_btn.clone(),
+                url_holder,
+                remote_info: remote_info_holder,
+            },
+        );
+        name_row.append(&remote_btn);
 
         // Tag badge
         if !tag.is_empty() {
@@ -4157,7 +4226,36 @@ fn apply_projects(state: &State, new_projects: Vec<ScannedProject>) {
     refresh_git_statuses(state);
 }
 
-/// Recompute the "modified tracked files" state for every project on a
+fn update_remote_button(
+    btn: &Button,
+    url_holder: &Rc<RefCell<Option<String>>>,
+    remote_info: Option<&sizzle_core::git::GitRemoteInfo>,
+) {
+    match remote_info {
+        Some(info) => {
+            *url_holder.borrow_mut() = info.web_url.clone();
+            if info.is_github {
+                let img = Image::builder()
+                    .icon_name("sizzle-github")
+                    .pixel_size(12)
+                    .build();
+                btn.set_child(Some(&img));
+                btn.set_tooltip_text(info.web_url.as_deref().or(Some("GitHub remote repository")));
+            } else {
+                let lbl = Label::builder().label("🌐").build();
+                btn.set_child(Some(&lbl));
+                btn.set_tooltip_text(info.web_url.as_deref().or(Some("Git remote repository")));
+            }
+            btn.set_visible(true);
+        }
+        None => {
+            *url_holder.borrow_mut() = None;
+            btn.set_visible(false);
+        }
+    }
+}
+
+/// Recompute the "modified tracked files" state and git remote info for every project on a
 /// background thread, then hand the results back to the UI thread (via the
 /// mpsc channel drained by `drain_git_results`). The in-progress flag prevents
 /// overlapping workers. Blocking git calls never run on the GTK thread.
@@ -4170,11 +4268,12 @@ fn refresh_git_statuses(state: &State) {
     let tx = st.git_result_tx.clone();
     let in_progress = st.git_refresh_in_progress.clone();
     std::thread::spawn(move || {
-        let results: HashMap<String, bool> = paths
+        let results: HashMap<String, GitRefreshResult> = paths
             .into_iter()
             .map(|p| {
                 let dirty = sizzle_core::git::has_modified_tracked_files(&p);
-                (p, dirty)
+                let remote_info = sizzle_core::git::get_git_remote_info(&p);
+                (p, GitRefreshResult { dirty, remote_info })
             })
             .collect();
         let _ = tx.send(results);
@@ -4187,9 +4286,13 @@ fn refresh_git_statuses(state: &State) {
 fn drain_git_results(state: &State) {
     let st = state.borrow();
     while let Ok(results) = st.git_result_rx.try_recv() {
-        for (path, is_dirty) in results {
+        for (path, res) in results {
             if let Some(badge) = st.git_badges.borrow().get(&path) {
-                badge.set_visible(is_dirty);
+                badge.set_visible(res.dirty);
+            }
+            if let Some(remote_state) = st.git_remote_btns.borrow().get(&path) {
+                *remote_state.remote_info.borrow_mut() = res.remote_info.clone();
+                update_remote_button(&remote_state.button, &remote_state.url_holder, res.remote_info.as_ref());
             }
         }
     }
