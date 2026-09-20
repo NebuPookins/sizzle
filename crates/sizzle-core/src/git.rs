@@ -36,6 +36,13 @@ pub struct GitStatus {
     pub is_detached: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRemoteInfo {
+    pub is_github: bool,
+    pub web_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectRepositoryInfo {
@@ -297,6 +304,126 @@ fn normalize_github_url(url: &str) -> Option<String> {
     None
 }
 
+/// Parse a git remote URL to determine if it is a GitHub remote and derive a web URL if possible.
+pub fn parse_remote_url(url: &str) -> (bool, Option<String>) {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return (false, None);
+    }
+
+    if let Some(gh_url) = normalize_github_url(trimmed) {
+        return (true, Some(gh_url));
+    }
+
+    // Generic SSH: git@host:owner/repo.git or user@host:owner/repo.git
+    if let Some(idx) = trimmed.find('@') {
+        let after_at = &trimmed[idx + 1..];
+        if let Some(colon_idx) = after_at.find(':') {
+            let host = &after_at[..colon_idx];
+            let path = &after_at[colon_idx + 1..];
+            if !host.is_empty() && !path.is_empty() && !host.contains('/') {
+                let repo_path = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+                let is_github = host.eq_ignore_ascii_case("github.com");
+                let web_url = format!("https://{}/{}", host, repo_path);
+                return (is_github, Some(web_url));
+            }
+        }
+    }
+
+    // Generic ssh://
+    if let Some(captured) = trimmed.strip_prefix("ssh://") {
+        let sans_user = if let Some(at_idx) = captured.find('@') {
+            &captured[at_idx + 1..]
+        } else {
+            captured
+        };
+        if let Some(slash_idx) = sans_user.find('/') {
+            let host = &sans_user[..slash_idx];
+            let path = &sans_user[slash_idx + 1..];
+            let repo_path = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+            let is_github = host.eq_ignore_ascii_case("github.com");
+            let web_url = format!("https://{}/{}", host, repo_path);
+            return (is_github, Some(web_url));
+        }
+    }
+
+    // Generic http:// or https://
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let scheme = if trimmed.starts_with("https://") { "https" } else { "http" };
+        let rest = &trimmed[scheme.len() + 3..];
+        let sans_auth = if let Some(at_idx) = rest.find('@') {
+            &rest[at_idx + 1..]
+        } else {
+            rest
+        };
+        let repo_path = sans_auth.strip_suffix(".git").unwrap_or(sans_auth).trim_end_matches('/');
+        let host = repo_path.split('/').next().unwrap_or("");
+        let is_github = host.eq_ignore_ascii_case("github.com");
+        let web_url = format!("{}://{}", scheme, repo_path);
+        return (is_github, Some(web_url));
+    }
+
+    (false, None)
+}
+
+pub fn get_git_remote_info(project_path: &str) -> Option<GitRemoteInfo> {
+    let dir = Path::new(project_path);
+    let git_dir = find_git_dir(dir)?;
+
+    let config_path = Path::new(&git_dir).join("config");
+    let head_path = Path::new(&git_dir).join("HEAD");
+
+    let Ok(config_content) = fs::read_to_string(&config_path) else {
+        return None;
+    };
+
+    let config = parse_git_config(&config_content);
+    let head_content = fs::read_to_string(&head_path).unwrap_or_default();
+    let head_match = head_content.trim().strip_prefix("ref: refs/heads/");
+    let current_branch = head_match.map(|s| s.trim().to_string());
+
+    let branch_remote = current_branch.as_ref()
+        .and_then(|b| config.get(&format!("branch \"{}\"", b)))
+        .and_then(|s| s.get("remote").cloned());
+
+    let mut remote_names = Vec::new();
+    if let Some(ref br) = branch_remote {
+        remote_names.push(br.clone());
+    }
+    remote_names.push("origin".to_string());
+    for key in config.keys() {
+        if let Some(name) = key.strip_prefix("remote \"").and_then(|s| s.strip_suffix('"')) {
+            if !remote_names.contains(&name.to_string()) {
+                remote_names.push(name.to_string());
+            }
+        }
+    }
+
+    if remote_names.is_empty() {
+        return None;
+    }
+
+    let mut first_remote_info: Option<GitRemoteInfo> = None;
+
+    for remote_name in &remote_names {
+        let section_key = format!("remote \"{}\"", remote_name);
+        if let Some(remote_config) = config.get(&section_key) {
+            if let Some(url) = remote_config.get("url") {
+                let (is_github, web_url) = parse_remote_url(url);
+                let info = GitRemoteInfo { is_github, web_url };
+                if is_github {
+                    return Some(info);
+                }
+                if first_remote_info.is_none() {
+                    first_remote_info = Some(info);
+                }
+            }
+        }
+    }
+
+    first_remote_info
+}
+
 /// Whether a repository has modified tracked files (staged or unstaged),
 /// excluding untracked files. Returns `false` for non-repositories or on error.
 ///
@@ -375,53 +502,10 @@ pub fn is_latest_commit_merged_elsewhere(worktree_path: &str) -> Option<Vec<Stri
 }
 
 pub fn get_project_repository_info(project_path: String) -> ProjectRepositoryInfo {
-    let dir = Path::new(&project_path);
-    let git_dir = match find_git_dir(dir) {
-        Some(d) => d,
-        None => return ProjectRepositoryInfo { is_git_repo: false, github_url: None },
-    };
-
-    let config_path = Path::new(&git_dir).join("config");
-    let head_path = Path::new(&git_dir).join("HEAD");
-
-    let Ok(config_content) = fs::read_to_string(&config_path) else {
-        return ProjectRepositoryInfo { is_git_repo: true, github_url: None };
-    };
-
-    let config = parse_git_config(&config_content);
-    let head_content = fs::read_to_string(&head_path).unwrap_or_default();
-    let head_match = head_content.trim().strip_prefix("ref: refs/heads/");
-    let current_branch = head_match.map(|s| s.trim().to_string());
-
-    let branch_remote = current_branch.as_ref()
-        .and_then(|b| config.get(&format!("branch \"{}\"", b)))
-        .and_then(|s| s.get("remote").cloned());
-
-    let mut remote_names = Vec::new();
-    if let Some(ref br) = branch_remote {
-        remote_names.push(br.clone());
-    }
-    remote_names.push("origin".to_string());
-    for key in config.keys() {
-        if let Some(name) = key.strip_prefix("remote \"").and_then(|s| s.strip_suffix('"')) {
-            if !remote_names.contains(&name.to_string()) {
-                remote_names.push(name.to_string());
-            }
-        }
-    }
-
-    for remote_name in &remote_names {
-        let section_key = format!("remote \"{}\"", remote_name);
-        if let Some(remote_config) = config.get(&section_key) {
-            if let Some(url) = remote_config.get("url") {
-                if let Some(gh_url) = normalize_github_url(url) {
-                    return ProjectRepositoryInfo { is_git_repo: true, github_url: Some(gh_url) };
-                }
-            }
-        }
-    }
-
-    ProjectRepositoryInfo { is_git_repo: true, github_url: None }
+    let is_git_repo = find_git_dir(Path::new(&project_path)).is_some();
+    let remote_info = get_git_remote_info(&project_path);
+    let github_url = remote_info.and_then(|r| if r.is_github { r.web_url } else { None });
+    ProjectRepositoryInfo { is_git_repo, github_url }
 }
 
 #[cfg(test)]
@@ -485,5 +569,27 @@ mod tests {
         let stats = parse_numstat("-\t-\tbin.dat\00\t0\tmode.txt\01\t0\tok.txt\0");
         assert_eq!(stats.len(), 1);
         assert!(stats.contains_key("ok.txt"));
+    }
+
+    #[test]
+    fn test_parse_remote_url_github() {
+        let (is_gh, url) = parse_remote_url("git@github.com:user/repo.git");
+        assert!(is_gh);
+        assert_eq!(url.as_deref(), Some("https://github.com/user/repo"));
+
+        let (is_gh, url) = parse_remote_url("https://github.com/user/repo.git");
+        assert!(is_gh);
+        assert_eq!(url.as_deref(), Some("https://github.com/user/repo"));
+    }
+
+    #[test]
+    fn test_parse_remote_url_gitlab() {
+        let (is_gh, url) = parse_remote_url("git@gitlab.com:org/project.git");
+        assert!(!is_gh);
+        assert_eq!(url.as_deref(), Some("https://gitlab.com/org/project"));
+
+        let (is_gh, url) = parse_remote_url("https://gitlab.com/org/project.git");
+        assert!(!is_gh);
+        assert_eq!(url.as_deref(), Some("https://gitlab.com/org/project"));
     }
 }
