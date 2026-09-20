@@ -184,9 +184,7 @@ fn install_app_icon() {
 
     let github_svg = include_bytes!("../../../assets/icons/github.svg");
     let github_icon_path = icon_dir.join("sizzle-github.svg");
-    if !github_icon_path.exists() {
-        let _ = std::fs::write(&github_icon_path, github_svg);
-    }
+    let _ = std::fs::write(&github_icon_path, github_svg);
 }
 
 // ── Config dir ────────────────────────────────────────────────────────────
