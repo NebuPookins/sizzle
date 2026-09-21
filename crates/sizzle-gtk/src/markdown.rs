@@ -267,7 +267,14 @@ fn setup_tags(buf: &TextBuffer) {
     multi_str_tag(buf, "code_inline", &[("family", "Monospace"), ("foreground", "#ce9178")]);
     multi_str_tag(buf, "code_block", &[("family", "Monospace"), ("foreground", "#d4d4d4"), ("background", "#2d2d2d")]);
     multi_str_tag(buf, "table_box", &[("family", "Monospace"), ("foreground", "#6e7681"), ("background", "#252526")]);
-    multi_str_tag(buf, "table_header", &[("family", "Monospace"), ("weight", "700"), ("foreground", "#569cd6"), ("background", "#2d2d2d")]);
+    {
+        let tag = TextTag::new(Some("table_header"));
+        tag.set_property("family", "Monospace");
+        tag.set_property("weight", 700_i32);
+        tag.set_property("foreground", "#569cd6");
+        tag.set_property("background", "#2d2d2d");
+        buf.tag_table().add(&tag);
+    }
     multi_str_tag(buf, "table_cell", &[("family", "Monospace"), ("foreground", "#d4d4d4"), ("background", "#252526")]);
     str_tag(buf, "blockquote", "foreground", "#b0b0b0");
     str_tag(buf, "link", "foreground", "#8be9fd");
