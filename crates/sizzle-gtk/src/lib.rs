@@ -628,7 +628,9 @@ fn build_ui(app: &Application) {
          }
          .project-list > row {
              background-color: transparent;
-             border-left: 2px solid transparent;
+             border-left-width: 2px;
+             border-left-style: solid;
+             border-left-color: transparent;
              padding: 0;
              border-radius: 0;
          }
@@ -638,7 +640,7 @@ fn build_ui(app: &Application) {
          .project-list > row:selected,
          .project-list > row:active {
              background-color: #2c2554;
-             border-left: 2px solid #ff5533;
+             border-left-color: #ff5533;
              color: #ede8f8;
          }
          .project-list > row:selected * {
@@ -686,7 +688,7 @@ fn build_ui(app: &Application) {
              padding: 0 2px;
              min-width: 0;
              min-height: 0;
-             margin-start: 2px;
+             margin-left: 2px;
              color: #9088b8;
          }
          .git-remote-btn:hover {
@@ -789,7 +791,9 @@ fn build_ui(app: &Application) {
          }
          .git-pane {
              background-color: #100d1c;
-             border-left: 1px solid #2e2952;
+             border-left-width: 1px;
+             border-left-style: solid;
+             border-left-color: #2e2952;
          }
          .git-pane-header {
              background-color: #1d1933;
@@ -1166,7 +1170,9 @@ fn build_ui(app: &Application) {
              border-bottom: 1px solid #2e2952;
          }
          .kanban-sidebar-row:selected {
-             border-left: 2px solid #00ccee !important;
+             border-left-width: 2px !important;
+             border-left-style: solid !important;
+             border-left-color: #00ccee !important;
          }
          .kanban-sidebar-icon {
              font-size: 16px;
