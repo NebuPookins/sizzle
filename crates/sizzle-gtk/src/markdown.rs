@@ -5,17 +5,85 @@ use std::time::SystemTime;
 use gtk4::gdk::Display;
 use gtk4::prelude::*;
 use gtk4::{ScrolledWindow, TextBuffer, TextTag, TextView, WrapMode};
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use sizzle_core;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{Theme, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use unicode_width::UnicodeWidthStr;
+
+pub struct CodeHighlighter {
+    syntax_set: SyntaxSet,
+    theme: Theme,
+}
+
+impl CodeHighlighter {
+    pub fn new() -> Self {
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let ts = ThemeSet::load_defaults();
+        let theme = ts
+            .themes
+            .get("base16-ocean.dark")
+            .or_else(|| ts.themes.get("Solarized (dark)"))
+            .cloned()
+            .unwrap_or_else(|| ts.themes.values().next().unwrap().clone());
+
+        Self { syntax_set, theme }
+    }
+
+    pub fn highlight(&self, lang: &str, code: &str) -> Vec<Vec<(syntect::highlighting::Color, String)>> {
+        let lang_clean = lang.trim().split_whitespace().next().unwrap_or("");
+        let syntax = self
+            .syntax_set
+            .find_syntax_by_token(lang_clean)
+            .or_else(|| self.syntax_set.find_syntax_by_extension(lang_clean))
+            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
+
+        let mut highlighter = HighlightLines::new(syntax, &self.theme);
+        let mut lines_output = Vec::new();
+
+        let cleaned_code = code.strip_suffix('\n').unwrap_or(code);
+        for line in cleaned_code.split('\n') {
+            let line_with_nl = format!("{}\n", line);
+            if let Ok(ranges) = highlighter.highlight_line_s(&line_with_nl, &self.syntax_set) {
+                let line_tokens = ranges
+                    .into_iter()
+                    .map(|(style, text)| {
+                        let t = if text.ends_with('\n') {
+                            &text[..text.len() - 1]
+                        } else {
+                            text
+                        };
+                        (style.foreground, t.to_string())
+                    })
+                    .filter(|(_, t)| !t.is_empty())
+                    .collect();
+                lines_output.push(line_tokens);
+            } else {
+                lines_output.push(vec![(
+                    syntect::highlighting::Color {
+                        r: 212,
+                        g: 212,
+                        b: 212,
+                        a: 255,
+                    },
+                    line.to_string(),
+                )]);
+            }
+        }
+        lines_output
+    }
+}
 
 #[derive(Clone)]
 pub struct MarkdownView {
     pub scroll: ScrolledWindow,
     view: TextView,
     source: Rc<RefCell<String>>,
-    /// (path, last-known mtime).  `None` mtime means "never synced" so the
+    /// (path, last-known mtime). `None` mtime means "never synced" so the
     /// next `check_and_reload` will always re-read.
     file_state: Rc<RefCell<Option<(String, Option<SystemTime>)>>>,
+    highlighter: Rc<CodeHighlighter>,
 }
 
 impl MarkdownView {
@@ -63,6 +131,7 @@ impl MarkdownView {
             view,
             source: Rc::new(RefCell::new(String::new())),
             file_state: Rc::new(RefCell::new(None)),
+            highlighter: Rc::new(CodeHighlighter::new()),
         }
     }
 
@@ -86,6 +155,10 @@ impl MarkdownView {
             list_depth: 0,
             ordered_counter: Vec::new(),
             in_code_block: false,
+            code_block_lang: String::new(),
+            code_block_buf: String::new(),
+            highlighter: &self.highlighter,
+            table_state: None,
         };
 
         for event in parser {
@@ -132,11 +205,9 @@ impl MarkdownView {
     }
 
     /// Re-read the underlying file if its modification time has changed since
-    /// the last render.  Does nothing when the view is in edit mode (so we
+    /// the last render. Does nothing when the view is in edit mode (so we
     /// don't clobber the user's unsaved edits).
     pub fn check_and_reload(&self) {
-        // Clone the file state once so we can check / read without holding a
-        // RefCell borrow across filesystem calls.
         let state = self.file_state.borrow().clone();
         let (path, last_mtime) = match state.as_ref() {
             Some(s) => s,
@@ -148,8 +219,6 @@ impl MarkdownView {
         let metadata = match std::fs::metadata(path) {
             Ok(m) => m,
             Err(_) => {
-                // File disappeared — clear file_state so we don't keep
-                // stat-ing a missing file on every tab switch.
                 *self.file_state.borrow_mut() = None;
                 return;
             }
@@ -169,8 +238,6 @@ impl MarkdownView {
                 *self.file_state.borrow_mut() = Some((path.clone(), Some(mtime)));
             }
             None => {
-                // File disappeared between metadata() and read — clear
-                // file_state so we don't keep stat-ing a missing file.
                 *self.file_state.borrow_mut() = None;
             }
         }
@@ -188,7 +255,7 @@ fn setup_tags(buf: &TextBuffer) {
     add_heading(buf, "h6", 1.0);
 
     // weight/style/strikethrough are not string properties.
-    int_tag(buf, "bold",  "weight", 700_i32);
+    int_tag(buf, "bold", "weight", 700_i32);
     bool_tag(buf, "strike", "strikethrough", true);
     // pango::Style must be passed as the enum, not as a raw gint.
     {
@@ -198,9 +265,12 @@ fn setup_tags(buf: &TextBuffer) {
     }
 
     multi_str_tag(buf, "code_inline", &[("family", "Monospace"), ("foreground", "#ce9178")]);
-    multi_str_tag(buf, "code_block",  &[("family", "Monospace"), ("foreground", "#d4d4d4"), ("background", "#2d2d2d")]);
-    str_tag(buf, "blockquote",  "foreground", "#b0b0b0");
-    str_tag(buf, "link",        "foreground", "#8be9fd");
+    multi_str_tag(buf, "code_block", &[("family", "Monospace"), ("foreground", "#d4d4d4"), ("background", "#2d2d2d")]);
+    multi_str_tag(buf, "table_box", &[("family", "Monospace"), ("foreground", "#6e7681"), ("background", "#252526")]);
+    multi_str_tag(buf, "table_header", &[("family", "Monospace"), ("weight", "700"), ("foreground", "#569cd6"), ("background", "#2d2d2d")]);
+    multi_str_tag(buf, "table_cell", &[("family", "Monospace"), ("foreground", "#d4d4d4"), ("background", "#252526")]);
+    str_tag(buf, "blockquote", "foreground", "#b0b0b0");
+    str_tag(buf, "link", "foreground", "#8be9fd");
 }
 
 fn add_heading(buf: &TextBuffer, name: &str, scale: f64) {
@@ -215,7 +285,6 @@ fn int_tag(buf: &TextBuffer, name: &str, prop: &str, val: i32) {
     tag.set_property(prop, val);
     buf.tag_table().add(&tag);
 }
-
 
 fn bool_tag(buf: &TextBuffer, name: &str, prop: &str, val: bool) {
     let tag = TextTag::new(Some(name));
@@ -237,6 +306,40 @@ fn multi_str_tag(buf: &TextBuffer, name: &str, props: &[(&str, &str)]) {
     buf.tag_table().add(&tag);
 }
 
+// ── Table data structures ──────────────────────────────────────────────────
+
+#[derive(Clone, Debug)]
+struct CellSegment {
+    text: String,
+    tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TableCellData {
+    segments: Vec<CellSegment>,
+}
+
+impl TableCellData {
+    fn display_width(&self) -> usize {
+        self.segments.iter().map(|s| s.text.width()).sum()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct TableRowData {
+    cells: Vec<TableCellData>,
+}
+
+#[derive(Clone, Debug)]
+struct TableBuildingState {
+    alignments: Vec<Alignment>,
+    headers: Option<TableRowData>,
+    rows: Vec<TableRowData>,
+    current_row: Option<TableRowData>,
+    current_cell: Option<TableCellData>,
+    in_head: bool,
+}
+
 // ── Render context ────────────────────────────────────────────────────────
 
 struct RenderCtx<'a> {
@@ -245,16 +348,42 @@ struct RenderCtx<'a> {
     list_depth: usize,
     ordered_counter: Vec<u64>,
     in_code_block: bool,
+    code_block_lang: String,
+    code_block_buf: String,
+    highlighter: &'a CodeHighlighter,
+    table_state: Option<TableBuildingState>,
 }
 
 impl<'a> RenderCtx<'a> {
-    fn insert(&self, text: &str) {
+    fn insert(&mut self, text: &str) {
+        if let Some(ref mut table) = self.table_state {
+            if let Some(ref mut cell) = table.current_cell {
+                cell.segments.push(CellSegment {
+                    text: text.to_string(),
+                    tags: self.active_tags.clone(),
+                });
+                return;
+            }
+        }
+        if self.in_code_block {
+            self.code_block_buf.push_str(text);
+            return;
+        }
         let mut iter = self.buf.end_iter();
         let tag_names: Vec<&str> = self.active_tags.iter().map(|s| s.as_str()).collect();
         if tag_names.is_empty() {
             self.buf.insert(&mut iter, text);
         } else {
             self.buf.insert_with_tags_by_name(&mut iter, text, &tag_names);
+        }
+    }
+
+    fn insert_direct(&self, text: &str, tag_names: &[&str]) {
+        let mut iter = self.buf.end_iter();
+        if tag_names.is_empty() {
+            self.buf.insert(&mut iter, text);
+        } else {
+            self.buf.insert_with_tags_by_name(&mut iter, text, tag_names);
         }
     }
 
@@ -271,11 +400,7 @@ impl<'a> RenderCtx<'a> {
             Event::Start(tag) => self.start_tag(tag),
             Event::End(tag) => self.end_tag(tag),
             Event::Text(text) => {
-                if self.in_code_block {
-                    self.insert(&text);
-                } else {
-                    self.insert(&text);
-                }
+                self.insert(&text);
             }
             Event::Code(text) => {
                 self.push("code_inline");
@@ -300,12 +425,16 @@ impl<'a> RenderCtx<'a> {
             Tag::Strikethrough => self.push("strike"),
             Tag::Link { dest_url, .. } => {
                 self.push("link");
-                let _ = dest_url; // URL not displayed inline
+                let _ = dest_url;
             }
-            Tag::CodeBlock(_) => {
+            Tag::CodeBlock(kind) => {
                 self.in_code_block = true;
+                self.code_block_lang = match kind {
+                    CodeBlockKind::Fenced(lang) => lang.to_string(),
+                    CodeBlockKind::Indented => String::new(),
+                };
+                self.code_block_buf.clear();
                 self.push("code_block");
-                self.insert("\n");
             }
             Tag::BlockQuote(_) => {
                 self.push("blockquote");
@@ -320,7 +449,7 @@ impl<'a> RenderCtx<'a> {
                 }
             }
             Tag::Item => {
-                let indent = "  ".repeat(self.list_depth - 1);
+                let indent = " ".repeat(self.list_depth - 1);
                 let is_ordered = self.ordered_counter.last().copied().unwrap_or(0) > 0;
                 if is_ordered {
                     let n = self.ordered_counter.last_mut().unwrap();
@@ -331,7 +460,31 @@ impl<'a> RenderCtx<'a> {
                     self.insert(&format!("{}• ", indent));
                 }
             }
-            Tag::Table(_) | Tag::TableHead | Tag::TableRow | Tag::TableCell => {}
+            Tag::Table(alignments) => {
+                self.table_state = Some(TableBuildingState {
+                    alignments,
+                    headers: None,
+                    rows: Vec::new(),
+                    current_row: None,
+                    current_cell: None,
+                    in_head: false,
+                });
+            }
+            Tag::TableHead => {
+                if let Some(ref mut table) = self.table_state {
+                    table.in_head = true;
+                }
+            }
+            Tag::TableRow => {
+                if let Some(ref mut table) = self.table_state {
+                    table.current_row = Some(TableRowData::default());
+                }
+            }
+            Tag::TableCell => {
+                if let Some(ref mut table) = self.table_state {
+                    table.current_cell = Some(TableCellData::default());
+                }
+            }
             _ => {}
         }
     }
@@ -347,9 +500,33 @@ impl<'a> RenderCtx<'a> {
                 self.pop();
             }
             TagEnd::CodeBlock => {
-                self.insert("\n\n");
-                self.pop();
                 self.in_code_block = false;
+                let code_text = std::mem::take(&mut self.code_block_buf);
+                let lang = std::mem::take(&mut self.code_block_lang);
+
+                self.insert_direct("\n", &["code_block"]);
+
+                let lines = self.highlighter.highlight(&lang, &code_text);
+                for line_tokens in lines {
+                    if line_tokens.is_empty() {
+                        self.insert_direct("\n", &["code_block"]);
+                        continue;
+                    }
+                    for (color, text) in line_tokens {
+                        let tag_name = format!("syn_{:02x}{:02x}{:02x}", color.r, color.g, color.b);
+                        if self.buf.tag_table().lookup(&tag_name).is_none() {
+                            let tag = TextTag::new(Some(&tag_name));
+                            let color_hex = format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
+                            tag.set_property("foreground", &color_hex);
+                            tag.set_property("family", "Monospace");
+                            self.buf.tag_table().add(&tag);
+                        }
+                        self.insert_direct(&text, &["code_block", &tag_name]);
+                    }
+                    self.insert_direct("\n", &["code_block"]);
+                }
+                self.insert_direct("\n", &[]);
+                self.pop();
             }
             TagEnd::BlockQuote(_) => {
                 self.insert("\n\n");
@@ -363,8 +540,160 @@ impl<'a> RenderCtx<'a> {
                 }
             }
             TagEnd::Item => self.insert("\n"),
-            TagEnd::Table | TagEnd::TableHead | TagEnd::TableRow | TagEnd::TableCell => {}
+            TagEnd::TableHead => {
+                if let Some(ref mut table) = self.table_state {
+                    table.in_head = false;
+                }
+            }
+            TagEnd::TableRow => {
+                if let Some(ref mut table) = self.table_state {
+                    if let Some(row) = table.current_row.take() {
+                        if table.in_head {
+                            table.headers = Some(row);
+                        } else {
+                            table.rows.push(row);
+                        }
+                    }
+                }
+            }
+            TagEnd::TableCell => {
+                if let Some(ref mut table) = self.table_state {
+                    if let Some(cell) = table.current_cell.take() {
+                        if let Some(ref mut row) = table.current_row {
+                            row.cells.push(cell);
+                        }
+                    }
+                }
+            }
+            TagEnd::Table => {
+                if let Some(table) = self.table_state.take() {
+                    self.render_table(table);
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn render_table(&mut self, table: TableBuildingState) {
+        let num_cols = table
+            .alignments
+            .len()
+            .max(table.headers.as_ref().map_or(0, |h| h.cells.len()))
+            .max(table.rows.iter().map(|r| r.cells.len()).max().unwrap_or(0));
+
+        if num_cols == 0 {
+            return;
+        }
+
+        let mut col_widths = vec![3usize; num_cols];
+        if let Some(ref h) = table.headers {
+            for (i, cell) in h.cells.iter().enumerate() {
+                if i < num_cols {
+                    col_widths[i] = col_widths[i].max(cell.display_width());
+                }
+            }
+        }
+        for row in &table.rows {
+            for (i, cell) in row.cells.iter().enumerate() {
+                if i < num_cols {
+                    col_widths[i] = col_widths[i].max(cell.display_width());
+                }
+            }
+        }
+
+        // Top border: ┌───┬───┐
+        let mut top_border = String::from("┌");
+        for (i, &w) in col_widths.iter().enumerate() {
+            top_border.push_str(&"─".repeat(w + 2));
+            if i < num_cols - 1 {
+                top_border.push('┬');
+            } else {
+                top_border.push_str("┐\n");
+            }
+        }
+        self.insert_direct(&top_border, &["table_box"]);
+
+        // Header row if present
+        if let Some(ref header_row) = table.headers {
+            self.render_table_row(header_row, &col_widths, &table.alignments, true);
+
+            // Separator: ├───┼───┤
+            let mut sep = String::from("├");
+            for (i, &w) in col_widths.iter().enumerate() {
+                sep.push_str(&"─".repeat(w + 2));
+                if i < num_cols - 1 {
+                    sep.push('┼');
+                } else {
+                    sep.push_str("┤\n");
+                }
+            }
+            self.insert_direct(&sep, &["table_box"]);
+        }
+
+        // Body rows
+        for row in &table.rows {
+            self.render_table_row(row, &col_widths, &table.alignments, false);
+        }
+
+        // Bottom border: └───┴───┘
+        let mut bot_border = String::from("└");
+        for (i, &w) in col_widths.iter().enumerate() {
+            bot_border.push_str(&"─".repeat(w + 2));
+            if i < num_cols - 1 {
+                bot_border.push('┴');
+            } else {
+                bot_border.push_str("┘\n\n");
+            }
+        }
+        self.insert_direct(&bot_border, &["table_box"]);
+    }
+
+    fn render_table_row(
+        &mut self,
+        row: &TableRowData,
+        col_widths: &[usize],
+        alignments: &[Alignment],
+        is_header: bool,
+    ) {
+        let cell_bg_tag = if is_header { "table_header" } else { "table_cell" };
+
+        self.insert_direct("│", &["table_box"]);
+
+        for (i, &w) in col_widths.iter().enumerate() {
+            let align = alignments.get(i).copied().unwrap_or(Alignment::None);
+            let cell = row.cells.get(i);
+            let cell_w = cell.map_or(0, |c| c.display_width());
+            let pad = w.saturating_sub(cell_w);
+
+            let (left_pad, right_pad) = match align {
+                Alignment::Right => (pad, 0),
+                Alignment::Center => (pad / 2, pad - (pad / 2)),
+                _ => (0, pad),
+            };
+
+            // Left padding
+            let l_str = format!(" {}", " ".repeat(left_pad));
+            self.insert_direct(&l_str, &[cell_bg_tag]);
+
+            // Cell content
+            if let Some(c) = cell {
+                for seg in &c.segments {
+                    let mut seg_tags = vec![cell_bg_tag];
+                    let seg_tag_refs: Vec<&str> = seg.tags.iter().map(|s| s.as_str()).collect();
+                    seg_tags.extend(seg_tag_refs);
+                    self.insert_direct(&seg.text, &seg_tags);
+                }
+            }
+
+            // Right padding
+            let r_str = format!("{} ", " ".repeat(right_pad));
+            self.insert_direct(&r_str, &[cell_bg_tag]);
+
+            if i < col_widths.len() - 1 {
+                self.insert_direct("│", &["table_box"]);
+            } else {
+                self.insert_direct("│\n", &["table_box"]);
+            }
         }
     }
 }
