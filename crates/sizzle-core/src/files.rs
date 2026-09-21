@@ -42,9 +42,49 @@ pub struct FilePreview {
     pub archive_tree: Option<Vec<ArchiveTreeNode>>,
 }
 
+/// Collapse `..`/`.` components purely lexically, without touching the
+/// filesystem. `Path::file_name` returns `None` for a path ending in `..`, so
+/// this must run before any walk that relies on `file_name`/`parent`.
+fn normalize_lexically(path: &Path) -> std::path::PathBuf {
+    let mut result = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => { result.pop(); }
+            std::path::Component::CurDir => {}
+            other => result.push(other.as_os_str()),
+        }
+    }
+    result
+}
+
+/// Resolve `candidate` to an absolute, symlink-free path even when it (or
+/// part of it) doesn't exist yet, by canonicalizing the nearest existing
+/// ancestor and appending the remaining (already `..`/`.`-free) components on
+/// top of it. `Path::canonicalize` alone fails on nonexistent paths, and a
+/// raw fallback to the un-resolved path lets `..` segments defeat a
+/// `starts_with` prefix check (e.g. `root/../../etc/passwd` still starts with
+/// `root`). `symlink_metadata` (rather than `metadata`) is used for the
+/// existence probe so a dangling symlink counts as "existing" and forces
+/// `canonicalize` to fail closed, instead of being treated as a missing path
+/// whose name would then be appended un-resolved.
+fn resolve_lexically(path: &Path) -> Option<std::path::PathBuf> {
+    let normalized = normalize_lexically(path);
+    let mut existing: &Path = &normalized;
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    while fs::symlink_metadata(existing).is_err() {
+        tail.push(existing.file_name()?);
+        existing = existing.parent()?;
+    }
+    let mut resolved = existing.canonicalize().ok()?;
+    for name in tail.into_iter().rev() {
+        resolved.push(name);
+    }
+    Some(resolved)
+}
+
 fn is_within_root(root: &str, candidate: &str) -> bool {
-    let root = Path::new(root).canonicalize().unwrap_or_else(|_| Path::new(root).to_path_buf());
-    let candidate = Path::new(candidate).canonicalize().unwrap_or_else(|_| Path::new(candidate).to_path_buf());
+    let Some(root) = resolve_lexically(Path::new(root)) else { return false };
+    let Some(candidate) = resolve_lexically(Path::new(candidate)) else { return false };
     candidate == root || candidate.starts_with(&root)
 }
 
@@ -423,5 +463,100 @@ pub fn get_project_detail(project_path: String) -> ProjectDetail {
         markdown_files,
         is_git_repo: repo_info.is_git_repo,
         github_url: repo_info.github_url,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_root() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("sizzle-files-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn write_markdown_file_rejects_traversal_to_a_nonexistent_path() {
+        let root = test_root();
+        let root_str = root.to_string_lossy().to_string();
+        let escape_target = root.parent().unwrap().join(format!("sizzle-escape-{}.md", uuid::Uuid::new_v4()));
+        let traversal_path = root.join("..").join(escape_target.file_name().unwrap());
+
+        let result = write_markdown_file(
+            root_str,
+            traversal_path.to_string_lossy().to_string(),
+            "malicious".to_string(),
+        );
+
+        assert!(result.is_err());
+        assert!(!escape_target.exists());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn write_markdown_file_allows_a_new_file_inside_the_root() {
+        let root = test_root();
+        let root_str = root.to_string_lossy().to_string();
+        let target = root.join("NEW.md");
+
+        let result = write_markdown_file(
+            root_str,
+            target.to_string_lossy().to_string(),
+            "hello".to_string(),
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "hello");
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// `Path::file_name` returns `None` for a path ending in `..`, which
+    /// previously made `resolve_lexically` bail out (rejecting the write)
+    /// once the walk-up reached a `..` component after crossing a
+    /// nonexistent leaf file. The subdirectory itself must exist, since the
+    /// OS can't resolve `..` through a directory that isn't there.
+    #[test]
+    fn write_markdown_file_allows_dot_dot_back_out_of_an_existing_subdirectory() {
+        let root = test_root();
+        fs::create_dir_all(root.join("subdir")).unwrap();
+        let root_str = root.to_string_lossy().to_string();
+        let real_target = root.join("real.md");
+        let traversal_path = root.join("subdir").join("..").join("real.md");
+
+        let result = write_markdown_file(
+            root_str,
+            traversal_path.to_string_lossy().to_string(),
+            "hello".to_string(),
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(fs::read_to_string(&real_target).unwrap(), "hello");
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A dangling symlink must be treated as "existing" (via
+    /// `symlink_metadata`) so containment fails closed instead of treating
+    /// the symlink's name as an un-resolved path component.
+    #[test]
+    fn write_markdown_file_rejects_through_a_dangling_symlink() {
+        let root = test_root();
+        let root_str = root.to_string_lossy().to_string();
+        let link = root.join("dangling");
+        std::os::unix::fs::symlink(root.join("does-not-exist"), &link).unwrap();
+        let traversal_path = link.join("new.md");
+
+        let result = write_markdown_file(
+            root_str,
+            traversal_path.to_string_lossy().to_string(),
+            "malicious".to_string(),
+        );
+
+        assert!(result.is_err());
+
+        fs::remove_dir_all(&root).unwrap();
     }
 }
