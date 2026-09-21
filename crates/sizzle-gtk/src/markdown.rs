@@ -45,7 +45,7 @@ impl CodeHighlighter {
         let cleaned_code = code.strip_suffix('\n').unwrap_or(code);
         for line in cleaned_code.split('\n') {
             let line_with_nl = format!("{}\n", line);
-            if let Ok(ranges) = highlighter.highlight_line_s(&line_with_nl, &self.syntax_set) {
+            if let Ok(ranges) = highlighter.highlight_line(&line_with_nl, &self.syntax_set) {
                 let line_tokens = ranges
                     .into_iter()
                     .map(|(style, text)| {
