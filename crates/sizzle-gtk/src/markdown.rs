@@ -1,9 +1,12 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::SystemTime;
 
 use gtk4::gdk::Display;
+use gtk4::glib;
 use gtk4::prelude::*;
+use gtk4::{Box as GtkBox, Button, Entry, EventControllerKey, Label, Orientation, Overlay};
 use gtk4::{ScrolledWindow, TextBuffer, TextTag, TextView, WrapMode};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use sizzle_core;
@@ -75,15 +78,26 @@ impl CodeHighlighter {
     }
 }
 
+#[derive(Default)]
+pub struct SearchState {
+    matches: Vec<(i32, i32)>, // (start_offset, end_offset)
+    active_index: Option<usize>,
+}
+
 #[derive(Clone)]
 pub struct MarkdownView {
-    pub scroll: ScrolledWindow,
+    pub container: Overlay,
+    scroll: ScrolledWindow,
     view: TextView,
     source: Rc<RefCell<String>>,
     /// (path, last-known mtime). `None` mtime means "never synced" so the
     /// next `check_and_reload` will always re-read.
     file_state: Rc<RefCell<Option<(String, Option<SystemTime>)>>>,
     highlighter: Rc<CodeHighlighter>,
+    search_box: GtkBox,
+    search_entry: Entry,
+    search_count_lbl: Label,
+    search_state: Rc<RefCell<SearchState>>,
 }
 
 impl MarkdownView {
@@ -104,7 +118,44 @@ impl MarkdownView {
             provider.load_from_data(
                 ".sizzle-md-view { background: #1e1e1e; color: #d4d4d4; }
                  .sizzle-md-view text { background: #1e1e1e; color: #d4d4d4; }
-                 .sizzle-md-view text selection { background: #264f78; }",
+                 .sizzle-md-view text selection { background: #264f78; }
+                 .sizzle-md-search {
+                     background-color: #252526;
+                     border: 1px solid #454545;
+                     border-radius: 6px;
+                     padding: 4px 8px;
+                     margin-top: 8px;
+                     margin-end: 16px;
+                     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+                 }
+                 .sizzle-md-search entry {
+                     background-color: #1e1e1e;
+                     color: #d4d4d4;
+                     border: 1px solid #3c3c3c;
+                     border-radius: 4px;
+                     min-height: 24px;
+                     padding: 2px 6px;
+                 }
+                 .sizzle-md-search entry:focus {
+                     border-color: #007acc;
+                 }
+                 .sizzle-md-search label {
+                     color: #cccccc;
+                     font-size: 12px;
+                 }
+                 .sizzle-md-search button {
+                     background-color: transparent;
+                     color: #cccccc;
+                     border: none;
+                     border-radius: 4px;
+                     min-width: 24px;
+                     min-height: 24px;
+                     padding: 0;
+                 }
+                 .sizzle-md-search button:hover {
+                     background-color: #333333;
+                     color: #ffffff;
+                 }",
             );
             gtk4::style_context_add_provider_for_display(
                 &display,
@@ -126,13 +177,294 @@ impl MarkdownView {
             .build();
         scroll.set_child(Some(&view));
 
-        Self {
+        // Search Overlay UI construction
+        let search_entry = Entry::builder()
+            .placeholder_text("Find…")
+            .width_chars(15)
+            .build();
+
+        let search_count_lbl = Label::builder()
+            .label("")
+            .margin_start(6)
+            .margin_end(6)
+            .build();
+
+        let prev_btn = Button::builder()
+            .label("▲")
+            .tooltip_text("Previous Match (Shift+Enter)")
+            .build();
+
+        let next_btn = Button::builder()
+            .label("▼")
+            .tooltip_text("Next Match (Enter)")
+            .build();
+
+        let close_btn = Button::builder()
+            .label("✕")
+            .tooltip_text("Close (Escape)")
+            .build();
+
+        let search_box = GtkBox::new(Orientation::Horizontal, 4);
+        search_box.add_css_class("sizzle-md-search");
+        search_box.set_halign(gtk4::Align::End);
+        search_box.set_valign(gtk4::Align::Start);
+        search_box.set_visible(false);
+
+        search_box.append(&search_entry);
+        search_box.append(&search_count_lbl);
+        search_box.append(&prev_btn);
+        search_box.append(&next_btn);
+        search_box.append(&close_btn);
+
+        let container = Overlay::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .child(&scroll)
+            .build();
+        container.add_overlay(&search_box);
+
+        let search_state = Rc::new(RefCell::new(SearchState::default()));
+
+        let mv = Self {
+            container,
             scroll,
             view,
             source: Rc::new(RefCell::new(String::new())),
             file_state: Rc::new(RefCell::new(None)),
             highlighter: Rc::new(CodeHighlighter::new()),
+            search_box,
+            search_entry,
+            search_count_lbl,
+            search_state,
+        };
+
+        mv.setup_search_handlers(&prev_btn, &next_btn, &close_btn);
+        mv
+    }
+
+    fn setup_search_handlers(&self, prev_btn: &Button, next_btn: &Button, close_btn: &Button) {
+        let mv = self.clone();
+        self.search_entry.connect_changed(move |_| {
+            mv.perform_search();
+        });
+
+        let mv = self.clone();
+        prev_btn.connect_clicked(move |_| {
+            mv.previous_match();
+        });
+
+        let mv = self.clone();
+        next_btn.connect_clicked(move |_| {
+            mv.next_match();
+        });
+
+        let mv = self.clone();
+        close_btn.connect_clicked(move |_| {
+            mv.close_search();
+        });
+
+        // Key controller on search Entry
+        let entry_key = EventControllerKey::new();
+        let mv = self.clone();
+        entry_key.connect_key_pressed(move |_, keyval, _, state| {
+            if keyval == gtk4::gdk::Key::Escape {
+                mv.close_search();
+                return glib::Propagation::Stop;
+            }
+            if keyval == gtk4::gdk::Key::Return || keyval == gtk4::gdk::Key::KP_Enter {
+                if state.contains(gtk4::gdk::ModifierType::SHIFT_MASK) {
+                    mv.previous_match();
+                } else {
+                    mv.next_match();
+                }
+                return glib::Propagation::Stop;
+            }
+            if keyval == gtk4::gdk::Key::f && state.contains(gtk4::gdk::ModifierType::CONTROL_MASK) {
+                mv.search_entry.grab_focus();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        self.search_entry.add_controller(entry_key);
+
+        // Key controller on TextView
+        let view_key = EventControllerKey::new();
+        let mv = self.clone();
+        view_key.connect_key_pressed(move |_, keyval, _, state| {
+            if keyval == gtk4::gdk::Key::f && state.contains(gtk4::gdk::ModifierType::CONTROL_MASK) {
+                mv.open_search();
+                return glib::Propagation::Stop;
+            }
+            if keyval == gtk4::gdk::Key::Escape {
+                if mv.search_box.is_visible() {
+                    mv.close_search();
+                    return glib::Propagation::Stop;
+                }
+            }
+            glib::Propagation::Proceed
+        });
+        self.view.add_controller(view_key);
+    }
+
+    /// Clear all search highlights from the text buffer.
+    pub fn clear_search_highlights(&self) {
+        let buf = self.view.buffer();
+        buf.remove_tag_by_name("search_highlight_all", &buf.start_iter(), &buf.end_iter());
+        buf.remove_tag_by_name("search_highlight_active", &buf.start_iter(), &buf.end_iter());
+    }
+
+    /// Open or re-focus the search bar overlay.
+    pub fn open_search(&self) {
+        self.search_box.set_visible(true);
+        self.search_entry.grab_focus();
+        if !self.search_entry.text().is_empty() {
+            self.perform_search();
         }
+    }
+
+    /// Close the search bar overlay and clear highlights.
+    pub fn close_search(&self) {
+        self.search_box.set_visible(false);
+        self.clear_search_highlights();
+        *self.search_state.borrow_mut() = SearchState::default();
+        self.search_count_lbl.set_text("");
+        self.view.grab_focus();
+    }
+
+    /// Perform a search based on current search entry query.
+    pub fn perform_search(&self) {
+        let query = self.search_entry.text().to_string();
+        self.clear_search_highlights();
+
+        if query.is_empty() {
+            self.search_count_lbl.set_text("");
+            *self.search_state.borrow_mut() = SearchState::default();
+            return;
+        }
+
+        let buf = self.view.buffer();
+        let text = buf.text(&buf.start_iter(), &buf.end_iter(), false);
+        let matches = find_substring_matches(&text, &query);
+
+        if matches.is_empty() {
+            self.search_count_lbl.set_text("No results");
+            *self.search_state.borrow_mut() = SearchState::default();
+            return;
+        }
+
+        for &(start, end) in &matches {
+            let start_iter = buf.iter_at_offset(start);
+            let end_iter = buf.iter_at_offset(end);
+            buf.apply_tag_by_name("search_highlight_all", &start_iter, &end_iter);
+        }
+
+        let active_idx = self.determine_active_match_on_type(&matches);
+
+        *self.search_state.borrow_mut() = SearchState {
+            matches,
+            active_index: Some(active_idx),
+        };
+
+        self.update_active_match_highlight();
+    }
+
+    fn determine_active_match_on_type(&self, matches: &[(i32, i32)]) -> usize {
+        let (v_start, v_end) = self.get_visible_offset_range();
+
+        // If any match is inside the visible viewport, keep the viewport stationary and pick the first visible match.
+        if let Some(idx) = matches.iter().position(|&(start, end)| {
+            (start >= v_start && start <= v_end) || (end >= v_start && end <= v_end) || (start <= v_start && end >= v_end)
+        }) {
+            return idx;
+        }
+
+        // Otherwise pick the first match at or below the viewport top, falling back to the first match overall.
+        let idx = matches.iter().position(|&(start, _)| start >= v_start).unwrap_or(0);
+        self.scroll_to_offset(matches[idx].0);
+        idx
+    }
+
+    fn get_visible_offset_range(&self) -> (i32, i32) {
+        let adj = self.scroll.vadjustment();
+        let top_y = adj.value() as i32;
+        let bottom_y = top_y + adj.page_size() as i32;
+
+        let (top_iter, _) = self.view.line_at_y(top_y);
+        let (mut bottom_iter, _) = self.view.line_at_y(bottom_y);
+
+        let top_offset = top_iter.offset();
+        let mut bottom_offset = bottom_iter.offset();
+        if !bottom_iter.is_end() {
+            bottom_iter.forward_to_line_end();
+            bottom_offset = bottom_iter.offset();
+        }
+
+        (top_offset, bottom_offset)
+    }
+
+    fn update_active_match_highlight(&self) {
+        let st = self.search_state.borrow();
+        let buf = self.view.buffer();
+        buf.remove_tag_by_name("search_highlight_active", &buf.start_iter(), &buf.end_iter());
+
+        if let Some(idx) = st.active_index {
+            if idx < st.matches.len() {
+                let (start, end) = st.matches[idx];
+                let start_iter = buf.iter_at_offset(start);
+                let end_iter = buf.iter_at_offset(end);
+                buf.apply_tag_by_name("search_highlight_active", &start_iter, &end_iter);
+                self.search_count_lbl.set_text(&format!("{}/{}", idx + 1, st.matches.len()));
+            }
+        }
+    }
+
+    /// Select the next search match (with wrap-around) and scroll to it.
+    pub fn next_match(&self) {
+        self.step_match(1);
+    }
+
+    /// Select the previous search match (with wrap-around) and scroll to it.
+    pub fn previous_match(&self) {
+        self.step_match(-1);
+    }
+
+    /// Advance the active match by `delta` (wrapping), then refresh the highlight and scroll.
+    fn step_match(&self, delta: isize) {
+        {
+            let mut st = self.search_state.borrow_mut();
+            if st.matches.is_empty() {
+                return;
+            }
+            let len = st.matches.len() as isize;
+            st.active_index = Some(match st.active_index {
+                Some(cur) => (cur as isize + delta).rem_euclid(len) as usize,
+                None => {
+                    if delta > 0 {
+                        0
+                    } else {
+                        len as usize - 1
+                    }
+                }
+            });
+        }
+
+        self.update_active_match_highlight();
+        self.scroll_to_active_match();
+    }
+
+    fn scroll_to_active_match(&self) {
+        let st = self.search_state.borrow();
+        if let Some(idx) = st.active_index {
+            if idx < st.matches.len() {
+                self.scroll_to_offset(st.matches[idx].0);
+            }
+        }
+    }
+
+    /// Scroll the view so the given buffer character offset is visible.
+    fn scroll_to_offset(&self, offset: i32) {
+        let mut iter = self.view.buffer().iter_at_offset(offset);
+        self.view.scroll_to_iter(&mut iter, 0.1, true, 0.0, 0.2);
     }
 
     /// Render markdown (view mode). Stores the source for later editing.
@@ -278,6 +610,10 @@ fn setup_tags(buf: &TextBuffer) {
     multi_str_tag(buf, "table_cell", &[("family", "Monospace"), ("foreground", "#d4d4d4"), ("background", "#252526")]);
     str_tag(buf, "blockquote", "foreground", "#b0b0b0");
     str_tag(buf, "link", "foreground", "#8be9fd");
+
+    // Search highlights
+    multi_str_tag(buf, "search_highlight_all", &[("background", "#615100"), ("foreground", "#ffffff")]);
+    multi_str_tag(buf, "search_highlight_active", &[("background", "#d96b00"), ("foreground", "#ffffff")]);
 }
 
 fn add_heading(buf: &TextBuffer, name: &str, scale: f64) {
@@ -714,4 +1050,42 @@ fn heading_tag(level: HeadingLevel) -> &'static str {
         HeadingLevel::H5 => "h5",
         HeadingLevel::H6 => "h6",
     }
+}
+
+/// Find substring matches with vim-style smart case:
+/// If `query` contains zero uppercase characters, search is case-insensitive.
+/// If `query` contains at least one uppercase character, search is case-sensitive.
+/// Returns character offset pairs `(start_char_offset, end_char_offset)`.
+fn find_substring_matches(text: &str, query: &str) -> Vec<(i32, i32)> {
+    if query.is_empty() || text.is_empty() {
+        return Vec::new();
+    }
+
+    let is_case_sensitive = query.chars().any(|c| c.is_uppercase());
+    let (haystack, needle): (Cow<'_, str>, Cow<'_, str>) = if is_case_sensitive {
+        (Cow::Borrowed(text), Cow::Borrowed(query))
+    } else {
+        (Cow::Owned(text.to_lowercase()), Cow::Owned(query.to_lowercase()))
+    };
+
+    let mut matches = Vec::new();
+    let mut search_start_byte = 0;
+
+    while let Some(byte_idx) = haystack[search_start_byte..].find(needle.as_ref()) {
+        let abs_start_byte = search_start_byte + byte_idx;
+        let abs_end_byte = abs_start_byte + needle.len();
+
+        let start_char_offset = text[..abs_start_byte].chars().count() as i32;
+        let end_char_offset = text[..abs_end_byte].chars().count() as i32;
+
+        matches.push((start_char_offset, end_char_offset));
+
+        // `needle` is non-empty (empty `query` returned early), so this advances at least one byte.
+        search_start_byte = abs_start_byte + needle.len();
+        if search_start_byte >= haystack.len() {
+            break;
+        }
+    }
+
+    matches
 }

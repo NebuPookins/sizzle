@@ -1826,7 +1826,7 @@ fn select_project(state: &State, path: &str) {
 
                 let container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
                 container.append(&toolbar);
-                container.append(&mv.scroll);
+                container.append(&mv.container);
 
                 notebook.append_page(&container, Some(&Label::new(Some(&tab_name))));
                 tab_meta.insert(
@@ -2137,7 +2137,7 @@ fn build_explorer_tab(project_root: &str) -> (Paned, markdown::MarkdownView) {
 
     let md_container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     md_container.append(&md_toolbar);
-    md_container.append(&md_view.scroll);
+    md_container.append(&md_view.container);
     content_stack.add_named(&md_container, Some("markdown"));
 
     let image_view = gtk4::Picture::new();
