@@ -1281,8 +1281,14 @@ impl KanbanBoardWidget {
                 // Optionally remove the git worktree if the directory still exists.
                 if remove_worktree_check.is_active() {
                     if let Some((ref wt_path, WtStatus::Present { .. })) = worktree_info {
+                        // `-C wt_path` matters: without it this runs in the app's
+                        // arbitrary process cwd (not a repo), fails silently, and
+                        // leaves the branch registered as checked out in the main
+                        // repo's `.git/worktrees` metadata even after the directory
+                        // below is deleted — blocking that branch from ever being
+                        // checked out again.
                         let _ = std::process::Command::new("git")
-                            .args(["worktree", "remove", "--force"])
+                            .args(["-C", wt_path, "worktree", "remove", "--force"])
                             .arg(wt_path)
                             .output();
                         let _ = std::fs::remove_dir_all(wt_path);
