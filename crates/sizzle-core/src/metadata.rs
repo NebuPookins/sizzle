@@ -90,7 +90,8 @@ impl MetadataStore {
         self.ensure_dir();
         let db = match fs::read_to_string(&self.db_path) {
             Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
-                log::info!("[sizzle] Failed to parse db.json: {}. First 500 chars: {}", e, &raw[..raw.len().min(500)]);
+                let preview: String = raw.chars().take(500).collect();
+                log::info!("[sizzle] Failed to parse db.json: {}. First 500 chars: {}", e, preview);
                 DB {
                     projects: HashMap::new(),
                     scan_settings: None,
@@ -395,6 +396,25 @@ mod tests {
             agent_presets: Vec::new(),
             kanban_board: None,
         }
+    }
+
+    #[test]
+    fn malformed_db_with_multibyte_char_at_the_preview_boundary_does_not_panic() {
+        let config_dir = test_dir();
+        fs::create_dir_all(&config_dir).unwrap();
+        let store = MetadataStore::new(config_dir.clone());
+
+        // Invalid JSON whose first 500 *bytes* end mid-way through a
+        // multi-byte UTF-8 character, to exercise the truncated log preview.
+        let mut raw = "x".repeat(499);
+        raw.push('日');
+        raw.push_str(&"y".repeat(50));
+        fs::write(&store.db_path, raw).unwrap();
+
+        let meta = store.get_metadata("anything");
+        assert!(meta.last_launched.is_none());
+
+        fs::remove_dir_all(config_dir).unwrap();
     }
 
     #[test]
