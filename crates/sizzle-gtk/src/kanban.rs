@@ -793,13 +793,29 @@ impl KanbanBoardWidget {
             let create_wt = wt_checkbtn.is_active() && project_path.is_some();
             let worktree_path = if create_wt && project_path.is_some() {
                 // Build a worktree path from the project dir and branch name.
+                // The short id is appended to (not just the slug) both the
+                // directory name and the branch name: a title with no
+                // alphanumeric characters (e.g. "???") slugifies to "", which
+                // would otherwise make the worktree dir resolve to
+                // `.sizzle-worktrees` itself — deleting that "worktree" later
+                // (`rm -rf`) would then wipe out every other card's worktree
+                // living alongside it. The id also keeps same-titled cards
+                // from colliding on one directory.
                 let slug = slugify(&title);
+                let short_id = &uuid::Uuid::new_v4().to_string()[..8];
+                let dir_name = if slug.is_empty() { short_id.to_string() } else { format!("{}-{}", slug, short_id) };
                 let base = std::path::Path::new(project_path.as_ref().unwrap());
-                let worktree_dir = base.join(".sizzle-worktrees").join(&slug);
+                let worktree_dir = base.join(".sizzle-worktrees").join(&dir_name);
                 let worktree_dir_str = worktree_dir.to_string_lossy().to_string();
 
-                // Attempt to create the branch and worktree.
-                let branch_name = format!("card/{}/{}", slug, &uuid::Uuid::new_v4().to_string()[..8]);
+                // Attempt to create the branch and worktree. Skip the slug
+                // segment entirely when empty rather than leaving a blank
+                // path component, which git rejects in ref names.
+                let branch_name = if slug.is_empty() {
+                    format!("card/{}", short_id)
+                } else {
+                    format!("card/{}/{}", slug, short_id)
+                };
                 let repo_dir = project_path.as_ref().unwrap();
                 let git_result = std::process::Command::new("git")
                     .args(["-C", repo_dir, "worktree", "add"])
@@ -2008,4 +2024,26 @@ fn slugify(s: &str) -> String {
         .collect::<String>()
         .trim_matches('-')
         .to_string()
+}
+
+#[cfg(test)]
+mod slugify_tests {
+    use super::slugify;
+
+    #[test]
+    fn keeps_alphanumeric_and_separators() {
+        assert_eq!(slugify("Fix the Bug!"), "fix-the-bug");
+    }
+
+    /// A title with no alphanumeric characters slugifies to "". Callers that
+    /// build a worktree directory from this must not join an empty string
+    /// directly: `PathBuf::join("")` is a no-op, so the path would resolve to
+    /// the parent `.sizzle-worktrees` directory shared by every card instead
+    /// of a fresh leaf directory (see the `dir_name` fallback in the card
+    /// dialog's "Set" handler).
+    #[test]
+    fn punctuation_only_title_slugifies_to_empty() {
+        assert!(slugify("???").is_empty());
+        assert!(slugify("!!!").is_empty());
+    }
 }
