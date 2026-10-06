@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -1055,37 +1054,89 @@ fn heading_tag(level: HeadingLevel) -> &'static str {
 /// Find substring matches with vim-style smart case:
 /// If `query` contains zero uppercase characters, search is case-insensitive.
 /// If `query` contains at least one uppercase character, search is case-sensitive.
-/// Returns character offset pairs `(start_char_offset, end_char_offset)`.
+/// Returns non-overlapping character offset pairs `(start_char_offset, end_char_offset)`
+/// into `text`, suitable for `TextBuffer::iter_at_offset`.
+///
+/// Matching is done on chars rather than bytes because lowercasing can change a
+/// char's UTF-8 length (e.g. 'K' KELVIN SIGN → 'k') or expand it into several
+/// chars (e.g. 'İ' → "i̇"), so byte offsets in a lowercased copy don't map back
+/// onto the original text.
 fn find_substring_matches(text: &str, query: &str) -> Vec<(i32, i32)> {
-    if query.is_empty() || text.is_empty() {
+    if query.is_empty() {
         return Vec::new();
     }
 
-    let is_case_sensitive = query.chars().any(|c| c.is_uppercase());
-    let (haystack, needle): (Cow<'_, str>, Cow<'_, str>) = if is_case_sensitive {
-        (Cow::Borrowed(text), Cow::Borrowed(query))
+    let case_sensitive = query.chars().any(char::is_uppercase);
+    let needle: Vec<char> = if case_sensitive {
+        query.chars().collect()
     } else {
-        (Cow::Owned(text.to_lowercase()), Cow::Owned(query.to_lowercase()))
+        query.chars().flat_map(char::to_lowercase).collect()
+    };
+    // Each (possibly lowercased) char paired with the offset of the original char it came from.
+    let haystack: Vec<(char, i32)> = if case_sensitive {
+        text.chars().zip(0..).collect()
+    } else {
+        text.chars()
+            .zip(0..)
+            .flat_map(|(c, offset)| c.to_lowercase().map(move |l| (l, offset)))
+            .collect()
     };
 
+    let n = needle.len();
     let mut matches = Vec::new();
-    let mut search_start_byte = 0;
-
-    while let Some(byte_idx) = haystack[search_start_byte..].find(needle.as_ref()) {
-        let abs_start_byte = search_start_byte + byte_idx;
-        let abs_end_byte = abs_start_byte + needle.len();
-
-        let start_char_offset = text[..abs_start_byte].chars().count() as i32;
-        let end_char_offset = text[..abs_end_byte].chars().count() as i32;
-
-        matches.push((start_char_offset, end_char_offset));
-
-        // `needle` is non-empty (empty `query` returned early), so this advances at least one byte.
-        search_start_byte = abs_start_byte + needle.len();
-        if search_start_byte >= haystack.len() {
-            break;
+    let mut pos = 0;
+    while pos + n <= haystack.len() {
+        let window = &haystack[pos..pos + n];
+        if window.iter().map(|&(c, _)| c).eq(needle.iter().copied()) {
+            matches.push((window[0].1, window[n - 1].1 + 1));
+            pos += n;
+        } else {
+            pos += 1;
         }
     }
-
     matches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_substring_matches;
+
+    #[test]
+    fn empty_query_matches_nothing() {
+        assert!(find_substring_matches("hello", "").is_empty());
+    }
+
+    #[test]
+    fn lowercase_query_is_case_insensitive() {
+        assert_eq!(find_substring_matches("Foo foo FOO", "foo"), vec![(0, 3), (4, 7), (8, 11)]);
+    }
+
+    #[test]
+    fn uppercase_query_is_case_sensitive() {
+        assert_eq!(find_substring_matches("Foo foo FOO", "Foo"), vec![(0, 3)]);
+    }
+
+    #[test]
+    fn matches_do_not_overlap() {
+        assert_eq!(find_substring_matches("aaaa", "aa"), vec![(0, 2), (2, 4)]);
+    }
+
+    #[test]
+    fn offsets_are_in_chars_not_bytes() {
+        assert_eq!(find_substring_matches("héllo wörld", "wörld"), vec![(6, 11)]);
+    }
+
+    #[test]
+    fn length_changing_lowercase_does_not_shift_offsets() {
+        // KELVIN SIGN (3 bytes) lowercases to ASCII 'k' (1 byte).
+        assert_eq!(find_substring_matches("\u{212A}elvin ok", "ok"), vec![(7, 9)]);
+        assert_eq!(find_substring_matches("\u{212A}elvin", "kelvin"), vec![(0, 6)]);
+    }
+
+    #[test]
+    fn multi_char_lowercase_does_not_shift_offsets() {
+        // 'İ' lowercases to two chars ("i\u{307}").
+        assert_eq!(find_substring_matches("İstanbul city", "city"), vec![(9, 13)]);
+        assert_eq!(find_substring_matches("İstanbul", "stan"), vec![(1, 5)]);
+    }
 }
