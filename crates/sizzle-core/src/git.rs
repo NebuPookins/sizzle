@@ -67,25 +67,16 @@ fn parse_git_status(stdout: &str) -> GitStatus {
     let mut fields = stdout.split('\0');
 
     if let Some(header) = fields.next().and_then(|h| h.strip_prefix("## ")) {
+        // An unborn branch is reported as `No commits yet on <branch>`, which
+        // may still carry an upstream (`...origin/main [gone]`).
+        let header = header.strip_prefix("No commits yet on ").unwrap_or(header).trim();
         if header.starts_with("HEAD (no branch)") {
             is_detached = true;
-        } else if let Some(rest) = header.strip_prefix("No commits yet on ") {
-            branch = Some(rest.trim().to_string());
-        } else if let Some(dot_idx) = header.find("...") {
-            branch = Some(header[..dot_idx].to_string());
-            let rest = &header[dot_idx + 3..];
-            if let Some(bracket_idx) = rest.find(" [") {
-                upstream = Some(rest[..bracket_idx].to_string());
-                let bracket_content = &rest[bracket_idx + 2..];
-                if let Some(end) = bracket_content.rfind(']') {
-                    let content = &bracket_content[..end];
-                    if let Some(a) = content.split("ahead ").nth(1).and_then(|s| s.split_whitespace().next()) {
-                        ahead = a.parse().unwrap_or(0);
-                    }
-                    if let Some(b) = content.split("behind ").nth(1).and_then(|s| s.split_whitespace().next()) {
-                        behind = b.parse().unwrap_or(0);
-                    }
-                }
+        } else if let Some((local, rest)) = header.split_once("...") {
+            branch = Some(local.to_string());
+            if let Some((up, tracking)) = rest.split_once(" [") {
+                upstream = Some(up.to_string());
+                (ahead, behind) = tracking.strip_suffix(']').map_or((0, 0), parse_ahead_behind);
             } else {
                 upstream = Some(rest.to_string());
             }
@@ -133,6 +124,19 @@ fn parse_git_status(stdout: &str) -> GitStatus {
     }
 
     GitStatus { branch, upstream, ahead, behind, staged, unstaged, untracked, is_detached }
+}
+
+/// Parse the bracketed tracking info of a `## branch...upstream [...]` header,
+/// e.g. `ahead 3`, `behind 2`, `ahead 3, behind 2` or `gone`, into
+/// `(ahead, behind)`. Missing or unparseable counts are 0.
+fn parse_ahead_behind(content: &str) -> (i32, i32) {
+    content
+        .split(", ")
+        .fold((0, 0), |(ahead, behind), item| match item.split_once(' ') {
+            Some(("ahead", n)) => (n.parse().unwrap_or(0), behind),
+            Some(("behind", n)) => (ahead, n.parse().unwrap_or(0)),
+            _ => (ahead, behind),
+        })
 }
 
 pub fn get_git_status(project_path: String) -> Option<GitStatus> {
@@ -542,6 +546,36 @@ mod tests {
         assert_eq!(status.staged[0].path, "dest.txt");
         assert_eq!(status.staged[0].orig_path.as_deref(), Some("src.txt"));
         assert_eq!(status.unstaged.len(), 0);
+    }
+
+    #[test]
+    fn status_parses_ahead_and_behind_together() {
+        let status = parse_git_status("## main...origin/main [ahead 3, behind 2]\0");
+        assert_eq!(status.branch.as_deref(), Some("main"));
+        assert_eq!(status.upstream.as_deref(), Some("origin/main"));
+        assert_eq!((status.ahead, status.behind), (3, 2));
+    }
+
+    #[test]
+    fn status_parses_ahead_or_behind_alone() {
+        let ahead = parse_git_status("## main...origin/main [ahead 4]\0");
+        assert_eq!((ahead.ahead, ahead.behind), (4, 0));
+        let behind = parse_git_status("## main...origin/main [behind 5]\0");
+        assert_eq!((behind.ahead, behind.behind), (0, 5));
+        let gone = parse_git_status("## main...origin/main [gone]\0");
+        assert_eq!(gone.upstream.as_deref(), Some("origin/main"));
+        assert_eq!((gone.ahead, gone.behind), (0, 0));
+    }
+
+    #[test]
+    fn status_unborn_branch_with_and_without_upstream() {
+        let bare = parse_git_status("## No commits yet on main\0");
+        assert_eq!(bare.branch.as_deref(), Some("main"));
+        assert_eq!(bare.upstream, None);
+
+        let tracked = parse_git_status("## No commits yet on main...origin/main [gone]\0");
+        assert_eq!(tracked.branch.as_deref(), Some("main"));
+        assert_eq!(tracked.upstream.as_deref(), Some("origin/main"));
     }
 
     #[test]
