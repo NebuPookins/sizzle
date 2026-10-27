@@ -46,7 +46,7 @@ pub struct ScanSettings {
     pub manual_project_roots: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DB {
     projects: HashMap<String, ProjectMeta>,
@@ -91,22 +91,18 @@ impl MetadataStore {
         let db = match fs::read_to_string(&self.db_path) {
             Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
                 let preview: String = raw.chars().take(500).collect();
-                log::info!("[sizzle] Failed to parse db.json: {}. First 500 chars: {}", e, preview);
-                DB {
-                    projects: HashMap::new(),
-                    scan_settings: None,
-                    agent_presets: Vec::new(),
-                    kanban_board: None,
-                }
+                log::error!("[sizzle] Failed to parse db.json: {}. First 500 chars: {}", e, preview);
+                self.quarantine_corrupt_db();
+                DB::default()
             }),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                log::error!("[sizzle] db.json is not valid UTF-8: {}", e);
+                self.quarantine_corrupt_db();
+                DB::default()
+            },
             Err(e) => {
                 log::info!("[sizzle] Failed to read db.json: {}", e);
-                DB {
-                    projects: HashMap::new(),
-                    scan_settings: None,
-                    agent_presets: Vec::new(),
-                    kanban_board: None,
-                }
+                DB::default()
             },
         };
         log::info!("[sizzle] read_db: {} projects, scan_settings: {}",
@@ -115,6 +111,20 @@ impl MetadataStore {
         );
         *cache = Some(db.clone());
         db
+    }
+
+    /// Move a corrupt (non-UTF-8 or unparseable) db.json aside so the empty database we fall back to
+    /// can't silently overwrite it on the next write. Without this, a single
+    /// hand-editing typo would wipe every project, preset and kanban card.
+    fn quarantine_corrupt_db(&self) {
+        let backup = self.config_dir.join(format!(
+            "db.json.corrupt-{}",
+            chrono::Utc::now().timestamp_millis()
+        ));
+        match fs::rename(&self.db_path, &backup) {
+            Ok(()) => log::error!("[sizzle] Moved corrupt db.json to {:?}", backup),
+            Err(e) => log::error!("[sizzle] Failed to back up corrupt db.json: {}", e),
+        }
     }
 
     /// Atomically replace the on-disk database and only then update the cache.
@@ -392,9 +402,7 @@ mod tests {
     fn db_with_project(path: &str) -> DB {
         DB {
             projects: HashMap::from([(path.to_string(), ProjectMeta::default())]),
-            scan_settings: None,
-            agent_presets: Vec::new(),
-            kanban_board: None,
+            ..DB::default()
         }
     }
 
@@ -413,6 +421,47 @@ mod tests {
 
         let meta = store.get_metadata("anything");
         assert!(meta.last_launched.is_none());
+
+        fs::remove_dir_all(config_dir).unwrap();
+    }
+
+    #[test]
+    fn unparseable_db_is_preserved_when_new_metadata_is_written() {
+        let config_dir = test_dir();
+        fs::create_dir_all(&config_dir).unwrap();
+        let store = MetadataStore::new(config_dir.clone());
+        let corrupt = r#"{"projects": {"/home/me/proj": {"marker": "favorite",}}}"#;
+        fs::write(&store.db_path, corrupt).unwrap();
+
+        store.set_project_marker("/other", Some("favorite".to_string()));
+
+        let preserved = fs::read_dir(&config_dir)
+            .unwrap()
+            .filter_map(|e| fs::read_to_string(e.unwrap().path()).ok())
+            .filter(|content| content == corrupt)
+            .count();
+        assert_eq!(preserved, 1);
+        assert!(store.get_metadata("/other").marker.is_some());
+
+        fs::remove_dir_all(config_dir).unwrap();
+    }
+
+    #[test]
+    fn non_utf8_db_is_preserved_when_new_metadata_is_written() {
+        let config_dir = test_dir();
+        fs::create_dir_all(&config_dir).unwrap();
+        let store = MetadataStore::new(config_dir.clone());
+        let corrupt: &[u8] = b"{\"projects\": {\"/home/me/\xff\": {}}}";
+        fs::write(&store.db_path, corrupt).unwrap();
+
+        store.set_project_marker("/other", Some("favorite".to_string()));
+
+        let preserved = fs::read_dir(&config_dir)
+            .unwrap()
+            .filter_map(|e| fs::read(e.unwrap().path()).ok())
+            .filter(|content| content == corrupt)
+            .count();
+        assert_eq!(preserved, 1);
 
         fs::remove_dir_all(config_dir).unwrap();
     }
