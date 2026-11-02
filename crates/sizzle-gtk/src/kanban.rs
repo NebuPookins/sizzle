@@ -705,22 +705,15 @@ impl KanbanBoardWidget {
         wt_row.append(&wt_checkbtn);
 
         // Worktree checkbox: auto-enabled for new cards, shows path if existing.
-        let projs = self.projects.borrow();
-        let checked_out = existing.as_ref().and_then(|c| c.worktree_path.as_ref()).is_some();
-        wt_checkbtn.set_active(checked_out || existing.is_none());
-        if existing.as_ref().and_then(|c| c.worktree_path.as_ref()).is_some() {
-            // Worktree already exists, show path.
-            if let Some(ref c) = existing {
-                if let Some(ref wt) = c.worktree_path {
-                    let wt_lbl = Label::builder()
-                        .label(&format!("(worktree: {})", wt))
-                        .css_classes(["dialog-field-label"])
-                        .build();
-                    wt_row.append(&wt_lbl);
-                }
-            }
+        let existing_worktree = existing.as_ref().and_then(|c| c.worktree_path.as_deref());
+        wt_checkbtn.set_active(existing_worktree.is_some() || existing.is_none());
+        if let Some(wt) = existing_worktree {
+            let wt_lbl = Label::builder()
+                .label(&format!("(worktree: {})", wt))
+                .css_classes(["dialog-field-label"])
+                .build();
+            wt_row.append(&wt_lbl);
         }
-        drop(projs);
 
         // ── Buttons ─────────────────────────────────────────────────────────
         let cancel_btn = Button::builder()
@@ -790,8 +783,20 @@ impl KanbanBoardWidget {
                 agent_names.get(agent_idx).cloned()
             };
 
-            let create_wt = wt_checkbtn.is_active() && project_path.is_some();
-            let worktree_path = if create_wt && project_path.is_some() {
+            // Reuse the card's current worktree when it is still usable for the
+            // selected project: re-saving an edited card would otherwise add a
+            // fresh branch and worktree on every save, orphaning the previous
+            // one on disk. Read from the board (not the dialog's snapshot) so
+            // the decision reflects the card as it is now.
+            let has_usable_worktree = edit_card_id_owned.as_deref().is_some_and(|cid| {
+                let board = self2.board.borrow();
+                let current = board.get_card(cid).and_then(|c| c.worktree_path.as_deref());
+                matches!((current, project_path.as_deref()), (Some(wt), Some(pp)) if is_usable_worktree(wt, pp))
+            });
+            let create_wt = !has_usable_worktree
+                && wt_checkbtn.is_active()
+                && project_path.is_some();
+            let worktree_path = if create_wt {
                 // Build a worktree path from the project dir and branch name.
                 // The short id is appended to (not just the slug) both the
                 // directory name and the branch name: a title with no
@@ -2022,6 +2027,14 @@ impl KanbanBoardWidget {
 
 // ── Slugify helper ──────────────────────────────────────────────────────────
 
+/// Whether `worktree` is a card worktree that can be reused for `project`: it
+/// must still exist on disk and live in that project's `.sizzle-worktrees`
+/// directory (a worktree left over from a previously selected project is not).
+fn is_usable_worktree(worktree: &str, project: &str) -> bool {
+    let worktree = Path::new(worktree);
+    worktree.starts_with(Path::new(project).join(".sizzle-worktrees")) && worktree.is_dir()
+}
+
 fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
@@ -2051,5 +2064,44 @@ mod slugify_tests {
     fn punctuation_only_title_slugifies_to_empty() {
         assert!(slugify("???").is_empty());
         assert!(slugify("!!!").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod worktree_reuse_tests {
+    use super::is_usable_worktree;
+
+    fn fresh_project(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("sizzle-wt-test-{}-{}", name, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join(".sizzle-worktrees/card-1")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn existing_worktree_in_selected_project_is_reused() {
+        let project = fresh_project("reuse");
+        let wt = project.join(".sizzle-worktrees/card-1");
+        assert!(is_usable_worktree(wt.to_str().unwrap(), project.to_str().unwrap()));
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    #[test]
+    fn deleted_worktree_is_not_reused() {
+        let project = fresh_project("deleted");
+        let wt = project.join(".sizzle-worktrees/card-1");
+        std::fs::remove_dir_all(&wt).unwrap();
+        assert!(!is_usable_worktree(wt.to_str().unwrap(), project.to_str().unwrap()));
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    #[test]
+    fn worktree_of_another_project_is_not_reused() {
+        let old_project = fresh_project("old");
+        let new_project = fresh_project("new");
+        let wt = old_project.join(".sizzle-worktrees/card-1");
+        assert!(!is_usable_worktree(wt.to_str().unwrap(), new_project.to_str().unwrap()));
+        std::fs::remove_dir_all(&old_project).unwrap();
+        std::fs::remove_dir_all(&new_project).unwrap();
     }
 }
