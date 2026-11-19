@@ -234,19 +234,18 @@ fn parse_numstat(stdout: &str) -> std::collections::HashMap<String, DiffStat> {
     map
 }
 
-fn find_git_dir(start_path: &Path) -> Option<String> {
+fn find_git_dir(start_path: &Path) -> Option<std::path::PathBuf> {
     let mut current = Some(start_path);
     while let Some(dir) = current {
         let dot_git = dir.join(".git");
         if dot_git.exists() {
             if dot_git.is_dir() {
-                return Some(dot_git.to_string_lossy().to_string());
+                return Some(dot_git);
             }
             if let Ok(content) = fs::read_to_string(&dot_git) {
                 if let Some(line) = content.lines().next() {
                     if let Some(gitdir) = line.strip_prefix("gitdir: ") {
-                        let resolved = dir.join(gitdir.trim());
-                        return Some(resolved.to_string_lossy().to_string());
+                        return Some(dir.join(gitdir.trim()));
                     }
                 }
             }
@@ -257,6 +256,16 @@ fn find_git_dir(start_path: &Path) -> Option<String> {
         current = Some(parent);
     }
     None
+}
+
+/// The repository's common directory, which holds shared state such as
+/// `config`. A linked worktree's gitdir names it in a `commondir` file (a path
+/// relative to the gitdir, or absolute); otherwise it is the gitdir itself.
+fn git_common_dir(git_dir: &Path) -> std::path::PathBuf {
+    match fs::read_to_string(git_dir.join("commondir")) {
+        Ok(common) if !common.trim().is_empty() => git_dir.join(common.trim()),
+        _ => git_dir.to_path_buf(),
+    }
 }
 
 fn parse_git_config(content: &str) -> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
@@ -374,8 +383,10 @@ pub fn get_git_remote_info(project_path: &str) -> Option<GitRemoteInfo> {
     let dir = Path::new(project_path);
     let git_dir = find_git_dir(dir)?;
 
-    let config_path = Path::new(&git_dir).join("config");
-    let head_path = Path::new(&git_dir).join("HEAD");
+    // `HEAD` is per-worktree, but `config` lives in the common dir, which for a
+    // linked worktree (`.git/worktrees/<name>`) is the main repo's `.git`.
+    let config_path = git_common_dir(&git_dir).join("config");
+    let head_path = git_dir.join("HEAD");
 
     let Ok(config_content) = fs::read_to_string(&config_path) else {
         return None;
@@ -614,6 +625,36 @@ mod tests {
         let (is_gh, url) = parse_remote_url("https://github.com/user/repo.git");
         assert!(is_gh);
         assert_eq!(url.as_deref(), Some("https://github.com/user/repo"));
+    }
+
+    #[test]
+    fn remote_info_of_linked_worktree_reads_the_shared_config_and_its_own_head() {
+        let base = std::env::temp_dir().join(format!("sizzle-git-test-{}", uuid::Uuid::new_v4()));
+        let main_git = base.join("main").join(".git");
+        let wt_git = main_git.join("worktrees").join("wt");
+        let wt = base.join("wt");
+        fs::create_dir_all(&wt_git).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(
+            main_git.join("config"),
+            "[remote \"origin\"]\n\turl = git@github.com:user/repo.git\n\
+             [remote \"fork\"]\n\turl = git@github.com:user/fork.git\n\
+             [branch \"feature\"]\n\tremote = fork\n",
+        )
+        .unwrap();
+        fs::write(main_git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::write(wt_git.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+        fs::write(wt_git.join("commondir"), "../..\n").unwrap();
+        fs::write(wt.join(".git"), "gitdir: ../main/.git/worktrees/wt\n").unwrap();
+
+        let info = get_git_remote_info(&wt.to_string_lossy());
+        fs::remove_dir_all(&base).unwrap();
+
+        // The worktree's own branch (`feature`) selects its `fork` remote.
+        assert_eq!(
+            info,
+            Some(GitRemoteInfo { is_github: true, web_url: Some("https://github.com/user/fork".into()) })
+        );
     }
 
     #[test]
